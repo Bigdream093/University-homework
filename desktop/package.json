@@ -1,0 +1,18 @@
+{
+  "name": "kexu-desktop",
+  "version": "1.0.0",
+  "description": "墨痕高校作业管理桌面端",
+  "author": "墨痕",
+  "private": true,
+  "main": "src/main.cjs",
+  "scripts": {
+    "build:teacher": "electron-builder --config electron-builder.teacher.yml",
+    "build:student": "electron-builder --config electron-builder.student.yml",
+    "build:student:mac": "electron-builder --config electron-builder.student.yml --mac --universal",
+    "build": "npm run build:teacher && npm run build:student"
+  },
+  "devDependencies": {
+    "electron": "44.0.0",
+    "electron-builder": "26.15.3"
+  }
+}

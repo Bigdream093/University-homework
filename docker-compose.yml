@@ -1,0 +1,16 @@
+services:
+  hw-app:
+    build: .
+    image: hw-app:latest
+    container_name: hw-app
+    restart: unless-stopped
+    ports:
+      - "34567:3000"
+    volumes:
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+    environment:
+      JWT_SECRET: ${JWT_SECRET:?请在.env中设置JWT_SECRET}
+      PORT: 3000
+      UPLOAD_MAX_MB: 200
+      TZ: Asia/Shanghai

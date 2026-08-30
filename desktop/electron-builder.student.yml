@@ -1,0 +1,41 @@
+appId: com.kexu.homework.student
+productName: 墨痕学生端
+copyright: Copyright © 2026 墨痕
+extraMetadata:
+  name: kexu-student
+  clientRole: student
+directories:
+  output: release/student
+  buildResources: build
+files:
+  - src/**/*
+  - package.json
+asar: true
+win:
+  icon: build/student.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: 墨痕学生端-Setup-${version}.${ext}
+mac:
+  icon: build/student.png
+  identity: null
+  category: public.app-category.education
+  target:
+    - target: dmg
+      arch:
+        - universal
+    - target: zip
+      arch:
+        - universal
+  artifactName: 墨痕学生端-macOS-${arch}-${version}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 墨痕学生端
+  uninstallDisplayName: 墨痕学生端
+publish: null

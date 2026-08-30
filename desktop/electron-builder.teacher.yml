@@ -1,0 +1,29 @@
+appId: com.kexu.homework.teacher
+productName: 墨痕教师端
+copyright: Copyright © 2026 墨痕
+extraMetadata:
+  name: kexu-teacher
+  clientRole: teacher
+directories:
+  output: release/teacher
+  buildResources: build
+files:
+  - src/**/*
+  - package.json
+asar: true
+win:
+  icon: build/teacher.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: 墨痕教师端-Setup-${version}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 墨痕教师端
+  uninstallDisplayName: 墨痕教师端
+publish: null

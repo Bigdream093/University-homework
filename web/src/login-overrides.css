@@ -1,0 +1,39 @@
+.login-hero .brand,
+.login-hero .hero-copy {
+  position: relative;
+  z-index: 1;
+}
+
+.login-hero .hero-copy {
+  margin: auto 0;
+}
+
+.login-hero .hero-copy .badge {
+  margin-bottom: 30px;
+}
+
+.login-hero h1 {
+  font-size: clamp(40px, 3.2vw, 52px);
+  line-height: 1.18;
+  letter-spacing: -1.5px;
+  margin-bottom: 28px;
+}
+
+.login-hero .hero-copy p {
+  margin: 0;
+}
+
+.login-hero h1 span {
+  display: block;
+  white-space: nowrap;
+}
+
+@media (max-width: 800px) {
+  .login-hero h1 {
+    font-size: clamp(30px, 9vw, 40px);
+  }
+
+  .login-hero h1 span {
+    white-space: normal;
+  }
+}

@@ -1,0 +1,15 @@
+node_modules/
+web/dist/
+server/data/
+server/uploads/
+.env
+*.log
+release/
+.mimosa/
+desktop/build/
+desktop/build-mac-staging/
+desktop/release-final/
+desktop/release-previous-*/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
