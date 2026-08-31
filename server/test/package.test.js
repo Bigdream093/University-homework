@@ -61,9 +61,9 @@ async function makeCourse(token) {
   return res.body.id;
 }
 
-async function makeAssignment(token, courseId, mode) {
+async function makeAssignment(token, courseId, mode, type = 'document') {
   const res = await request(app).post(`/api/courses/${courseId}/assignments`).set('Authorization', `Bearer ${token}`)
-    .send({ title: mode === 'append' ? '追加模式作业' : '覆盖模式作业', type: 'document', total_score: 100, allow_resubmit_count: -1, submission_mode: mode, status: 'published' });
+    .send({ title: mode === 'append' ? '追加模式作业' : '覆盖模式作业', type, total_score: 100, allow_resubmit_count: -1, submission_mode: mode, status: 'published' });
   assert.equal(res.status, 201);
   assert.equal(res.body.submission_mode, mode);
   return res.body.id;
@@ -83,13 +83,13 @@ test('append mode keeps every uploaded file and the package zip contains all ver
   const first = await request(app).post(`/api/assignments/${assignmentId}/submit`).set('Authorization', `Bearer ${studentToken}`)
     .attach('file', Buffer.from('first version'), { filename: '草稿一.zip', contentType: 'application/zip' });
   assert.equal(first.status, 201);
-  const firstFile = first.body.file_url;
+  const firstFile = db.prepare('SELECT file_url FROM submissions WHERE id=?').get(first.body.id).file_url;
   assert.ok(fs.existsSync(firstFile));
 
   const second = await request(app).post(`/api/assignments/${assignmentId}/submit`).set('Authorization', `Bearer ${studentToken}`)
     .attach('file', Buffer.from('second version'), { filename: '补充二.zip', contentType: 'application/zip' });
   assert.equal(second.status, 201);
-  const secondFile = second.body.file_url;
+  const secondFile = db.prepare('SELECT file_url FROM submissions WHERE id=?').get(second.body.id).file_url;
   assert.ok(fs.existsSync(secondFile));
   assert.ok(fs.existsSync(firstFile), '追加模式下旧文件不应被删除');
 
@@ -122,7 +122,7 @@ test('overwrite mode still removes the replaced physical file and zip keeps only
 
   const first = await request(app).post(`/api/assignments/${assignmentId}/submit`).set('Authorization', `Bearer ${studentToken}`)
     .attach('file', Buffer.from('old'), { filename: '旧版.zip', contentType: 'application/zip' });
-  const firstFile = first.body.file_url;
+  const firstFile = db.prepare('SELECT file_url FROM submissions WHERE id=?').get(first.body.id).file_url;
 
   const second = await request(app).post(`/api/assignments/${assignmentId}/submit`).set('Authorization', `Bearer ${studentToken}`)
     .attach('file', Buffer.from('new'), { filename: '新版.zip', contentType: 'application/zip' });
@@ -148,7 +148,7 @@ test('package zip packs online-only answers as txt entries', async () => {
   const courseId = await makeCourse(teacherToken);
   await request(app).post(`/api/courses/${courseId}/students`).set('Authorization', `Bearer ${teacherToken}`)
     .send({ username: '20260001', name: '演示学生' });
-  const assignmentId = await makeAssignment(teacherToken, courseId, 'append');
+  const assignmentId = await makeAssignment(teacherToken, courseId, 'append', 'online');
 
   const studentLogin = await request(app).post('/api/auth/login').send({ username: '20260001', password: '123456' });
   assert.equal(studentLogin.status, 200);

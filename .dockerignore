@@ -8,3 +8,7 @@ data/
 uploads/
 .env
 *.log
+.git/
+desktop/
+release/
+backups/

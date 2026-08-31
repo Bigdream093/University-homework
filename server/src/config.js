@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 
 dotenv.config({ quiet: true });
+if(process.env.NODE_ENV==='production'&&process.env.TZ!=='Asia/Shanghai')throw new Error('生产环境必须设置 TZ=Asia/Shanghai');
 const here = path.dirname(fileURLToPath(import.meta.url));
 const serverRoot = path.resolve(here, '..');
 

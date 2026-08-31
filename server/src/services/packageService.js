@@ -11,14 +11,15 @@ export async function downloadAssignmentPackage(assignmentId, teacherId, res) {
     return;
   }
 
-  const students = db.prepare(`SELECT u.id student_id,u.username,u.name,s.id submission_id,s.content,s.is_late,s.submitted_at
+  const group = assignment.work_mode === 'group';
+  const students = group ? db.prepare('SELECT g.name,g.name username,s.id submission_id,s.content,s.is_late,s.submitted_at FROM assignment_groups g LEFT JOIN group_submissions s ON s.assignment_group_id=g.id WHERE g.assignment_id=? ORDER BY g.id').all(assignment.id) : db.prepare(`SELECT u.id student_id,u.username,u.name,s.id submission_id,s.content,s.is_late,s.submitted_at
     FROM course_students cs JOIN users u ON u.id=cs.student_id
     LEFT JOIN submissions s ON s.assignment_id=? AND s.student_id=u.id
     WHERE cs.course_id=? ORDER BY cs.sort_order,u.username`).all(assignment.id, assignment.course_id);
 
-  const historyRows = db.prepare(`SELECT h.submission_id,h.file_url,h.file_name,h.content,h.submitted_at,h.is_late
+  const historyRows = group ? db.prepare("SELECT h.group_submission_id submission_id,h.file_url,h.file_name,h.content,h.submitted_at,h.is_late FROM group_submission_history h JOIN group_submissions s ON s.id=h.group_submission_id JOIN assignment_groups g ON g.id=s.assignment_group_id WHERE g.assignment_id=? AND h.file_state IN ('available','online') ORDER BY h.id").all(assignment.id) : db.prepare(`SELECT h.submission_id,h.file_url,h.file_name,h.content,h.submitted_at,h.is_late
     FROM submission_history h JOIN submissions s ON s.id=h.submission_id
-    WHERE s.assignment_id=? AND (h.file_url IS NOT NULL OR (h.content IS NOT NULL AND h.content <> ''))
+    WHERE s.assignment_id=? AND h.file_state IN ('available','online') AND (h.file_url IS NOT NULL OR (h.content IS NOT NULL AND h.content <> ''))
     ORDER BY h.submitted_at,h.id`).all(assignment.id);
 
   const studentMap = new Map(students.map(s => [s.submission_id, s]));
@@ -26,7 +27,7 @@ export async function downloadAssignmentPackage(assignmentId, teacherId, res) {
   const entries = [];
 
   const uniqueName = (name, fallback) => {
-    let base = String(name || '').trim() || fallback;
+    let base = safeName(String(name || '').trim() || fallback);
     let candidate = base;
     let index = 2;
     while (usedNames.has(candidate.toLowerCase())) {

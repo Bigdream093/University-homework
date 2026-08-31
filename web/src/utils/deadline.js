@@ -16,8 +16,8 @@ export function deadlineState(deadline, now = Date.now()) {
   const deadlineTimestamp = parseChinaTime(deadline);
   if (!deadlineTimestamp) return { kind: 'none', text: '不限时间', remainingMs: null };
 
-  const remainingMs = deadlineTimestamp - now;
-  if (remainingMs <= 0) {
+  const remainingMs = deadlineTimestamp - Math.floor(now / 1000) * 1000;
+  if (remainingMs < 0) {
     return { kind: 'late', text: '已超过截止时间，提交将记为迟交', remainingMs };
   }
 

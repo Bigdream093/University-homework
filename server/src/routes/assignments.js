@@ -3,73 +3,63 @@ import { db } from '../db.js';
 import { auth } from '../middleware/auth.js';
 import { teacherOnly } from '../middleware/teacher.js';
 import { deleteAssignment } from '../services/deletionService.js';
-import { nowText } from '../utils/time.js';
-
-const router = Router();
-const ownAssignment = (id, teacherId) => db.prepare(`SELECT a.* FROM assignments a JOIN courses c ON c.id=a.course_id WHERE a.id=? AND c.teacher_id=?`).get(id, teacherId);
-const MAX_FILE_MB_OPTIONS = [100, 200, 500, 1024];
-function parseMaxFileMb(value, fallback) {
-  if (value === undefined || value === null || value === '') return fallback;
-  const num = Number(value);
-  return MAX_FILE_MB_OPTIONS.includes(num) ? num : null;
+import { courseAccess,assignmentAccess,subjectFor,textValue,fail } from '../services/access.js';
+import { nowText,validTime } from '../utils/time.js';
+import { effectiveDeadline } from '../services/extensions.js';
+const router=Router();
+function values(body,current={}){
+ const a={...current,...body};
+ const title=textValue(a.title,'作业标题',200),deadline=a.deadline||null,max=Number(a.max_file_mb??200),score=Number(a.total_score??100),allowed=Number(a.allow_resubmit_count??1);
+ if(deadline&&!validTime(deadline))fail(400,'截止时间格式无效');
+ if(![100,200,500,1024].includes(max))fail(400,'文件大小上限只能是 100M、200M、500M 或 1G');
+ if(!Number.isFinite(score)||score<=0||!Number.isInteger(allowed)||allowed< -1)fail(400,'分值或提交次数无效');
+ const work=a.work_mode??'individual',policy=a.group_submit_policy??'designated',mode=a.submission_mode??'overwrite',type=a.type??'document';
+ if(!['individual','group'].includes(work)||!['designated','any'].includes(policy)||!['overwrite','append'].includes(mode)||!['document','image','video','online'].includes(type))fail(400,'作业设置无效');
+ if(current.id&&(current.status!=='draft'||current.groups_locked||db.prepare('SELECT 1 FROM submissions WHERE assignment_id=?').get(current.id))&&work!==current.work_mode)fail(400,'已发布或已有提交的作业不能改变个人/分组类型');
+ return [title,textValue(a.description,'作业要求',20000,false),type,deadline,score,allowed,mode,max,work,policy];
 }
-
-router.get('/courses/:id/assignments', auth, (req, res) => {
-  const course = db.prepare('SELECT * FROM courses WHERE id=?').get(req.params.id);
-  if (!course) return res.status(404).json({ message: '课程不存在' });
-  const teacher = req.user.role === 'teacher' && course.teacher_id === req.user.id;
-  const student = req.user.role === 'student' && db.prepare('SELECT 1 FROM course_students WHERE course_id=? AND student_id=?').get(course.id, req.user.id);
-  if (!teacher && !student) return res.status(403).json({ message: '无权访问' });
-  const sql = `SELECT a.*${student ? `,(SELECT status FROM submissions s WHERE s.assignment_id=a.id AND s.student_id=?) submission_status,(SELECT submitted_at FROM submissions s WHERE s.assignment_id=a.id AND s.student_id=?) submitted_at` : ''} FROM assignments a WHERE course_id=?${student ? ` AND status='published'` : ''} ORDER BY deadline IS NULL, deadline`;
-  const rows = student ? db.prepare(sql).all(req.user.id, req.user.id, req.params.id) : db.prepare(sql).all(req.params.id);
-  const serverNow = nowText();
-  res.json(rows.map(row => ({ ...row, server_now: serverNow })));
+function publish(a){
+ if(a.work_mode==='group'){
+ const groups=db.prepare('SELECT * FROM assignment_groups WHERE assignment_id=?').all(a.id);
+ if(!groups.length)fail(400,'分组作业必须先配置成员快照');
+ for(const g of groups){
+ const list=db.prepare('SELECT student_id FROM assignment_group_members WHERE assignment_group_id=?').all(g.id);
+ if(!list.length)fail(400,'不能发布空小组');
+ if(!a.groups_locked)for(const m of list)if(!db.prepare('SELECT 1 FROM course_students WHERE course_id=? AND student_id=?').get(a.course_id,m.student_id))fail(400,'快照成员已退课，请重新配置');
+ if(a.group_submit_policy==='designated'&&!list.some(m=>m.student_id===g.submitter_id))fail(400,'小组没有有效提交人');
+ }
+ }
+ db.prepare("UPDATE assignments SET status='published',groups_locked=1,updated_at=? WHERE id=?").run(nowText(),a.id);
+}
+router.get('/courses/:id/assignments',auth,(req,res)=>{
+ const c=courseAccess(req.params.id,req.user);
+ const rows=db.prepare("SELECT * FROM assignments WHERE course_id=?"+(req.user.role==='student'?" AND status IN ('published','closed')":'')+" ORDER BY deadline IS NULL,deadline,id DESC").all(c.id);
+ res.json(rows.map(a=>{
+ if(req.user.role==='student'){
+ const subject=subjectFor({...a,course_status:c.status},req.user);
+ const sub=subject.not_assigned?null:subject.group?db.prepare('SELECT status,submitted_at FROM group_submissions WHERE assignment_group_id=?').get(subject.group.id):db.prepare('SELECT status,submitted_at FROM submissions WHERE assignment_id=? AND student_id=?').get(a.id,req.user.id);
+ return {...a,submission_status:sub?.status,submitted_at:sub?.submitted_at,can_submit:subject.can_submit,not_assigned:subject.not_assigned||false,effective_deadline:subject.not_assigned?null:effectiveDeadline(a,subject).deadline,server_now:nowText()};
+ }return {...a,server_now:nowText()};
+ }));
 });
-
-router.get('/assignments/:id', auth, (req, res) => {
-  const assignment = db.prepare('SELECT a.*,c.name course_name,c.teacher_id FROM assignments a JOIN courses c ON c.id=a.course_id WHERE a.id=?').get(req.params.id);
-  if (!assignment) return res.status(404).json({ message: '作业不存在' });
-  const allowed = req.user.role === 'teacher' ? assignment.teacher_id === req.user.id : assignment.status === 'published' && db.prepare('SELECT 1 FROM course_students WHERE course_id=? AND student_id=?').get(assignment.course_id, req.user.id);
-  if (!allowed) return res.status(403).json({ message: '无权访问' });
-  delete assignment.teacher_id;
-  res.json({ ...assignment, server_now: nowText() });
+router.get('/assignments/:id',auth,(req,res)=>{const a=assignmentAccess(req.params.id,req.user);delete a.teacher_id;res.json({...a,server_now:nowText()});});
+router.post('/courses/:id/assignments',auth,teacherOnly,(req,res)=>{
+ const c=courseAccess(req.params.id,req.user,{write:true}),v=values(req.body),status=req.body.status??'draft';
+ if(!['draft','published'].includes(status))fail(400,'新作业状态无效');
+ const id=db.transaction(()=>{
+ const id=db.prepare("INSERT INTO assignments(course_id,title,description,type,deadline,total_score,allow_resubmit_count,submission_mode,max_file_mb,work_mode,group_submit_policy,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,'draft',?,?)").run(c.id,...v,nowText(),nowText()).lastInsertRowid;
+ if(status==='published')publish(db.prepare('SELECT * FROM assignments WHERE id=?').get(id));return id;
+ })();res.status(201).json(db.prepare('SELECT * FROM assignments WHERE id=?').get(id));
 });
-
-router.post('/courses/:id/assignments', auth, teacherOnly, (req, res) => {
-  const course = db.prepare('SELECT * FROM courses WHERE id=? AND teacher_id=?').get(req.params.id, req.user.id);
-  if (!course) return res.status(404).json({ message: '课程不存在' });
-  const title = String(req.body.title || '').trim();
-  if (!title) return res.status(400).json({ message: '作业标题不能为空' });
-  const submissionMode = req.body.submission_mode === 'append' ? 'append' : 'overwrite';
-  const maxFileMb = parseMaxFileMb(req.body.max_file_mb, 200);
-  if (maxFileMb === null) return res.status(400).json({ message: '文件大小上限只能是 100M、200M、500M 或 1G' });
-  const info = db.prepare(`INSERT INTO assignments(course_id,title,description,type,deadline,total_score,allow_resubmit_count,submission_mode,max_file_mb,status) VALUES(?,?,?,?,?,?,?,?,?,?)`)
-    .run(course.id, title, req.body.description || '', req.body.type || 'document', req.body.deadline || null, Number(req.body.total_score ?? 100), Number(req.body.allow_resubmit_count ?? 1), submissionMode, maxFileMb, req.body.status || 'draft');
-  res.status(201).json(db.prepare('SELECT * FROM assignments WHERE id=?').get(info.lastInsertRowid));
+router.put('/assignments/:id',auth,teacherOnly,(req,res)=>{
+ const a=assignmentAccess(req.params.id,req.user,{write:true}),v=values(req.body,a);
+ db.prepare('UPDATE assignments SET title=?,description=?,type=?,deadline=?,total_score=?,allow_resubmit_count=?,submission_mode=?,max_file_mb=?,work_mode=?,group_submit_policy=?,updated_at=? WHERE id=?').run(...v,nowText(),a.id);
+ res.json(db.prepare('SELECT * FROM assignments WHERE id=?').get(a.id));
 });
-
-router.put('/assignments/:id', auth, teacherOnly, (req, res) => {
-  const current = ownAssignment(req.params.id, req.user.id);
-  if (!current) return res.status(404).json({ message: '作业不存在' });
-  const title = String(req.body.title || '').trim();
-  if (!title) return res.status(400).json({ message: '作业标题不能为空' });
-  const submissionMode = req.body.submission_mode === 'append' ? 'append' : 'overwrite';
-  const maxFileMb = parseMaxFileMb(req.body.max_file_mb, current.max_file_mb ?? 200);
-  if (maxFileMb === null) return res.status(400).json({ message: '文件大小上限只能是 100M、200M、500M 或 1G' });
-  db.prepare(`UPDATE assignments SET title=?,description=?,type=?,deadline=?,total_score=?,allow_resubmit_count=?,submission_mode=?,max_file_mb=?,updated_at=datetime('now','localtime') WHERE id=?`)
-    .run(title, req.body.description || '', req.body.type || 'document', req.body.deadline || null, Number(req.body.total_score ?? 100), Number(req.body.allow_resubmit_count ?? 1), submissionMode, maxFileMb, current.id);
-  res.json(db.prepare('SELECT * FROM assignments WHERE id=?').get(current.id));
+router.delete('/assignments/:id',auth,teacherOnly,(req,res)=>{const a=assignmentAccess(req.params.id,req.user,{write:true});deleteAssignment(a.id);res.json({message:'作业已删除'});});
+router.post('/assignments/:id/publish',auth,teacherOnly,(req,res)=>{db.transaction(()=>publish(assignmentAccess(req.params.id,req.user,{write:true})))();res.json({message:'作业已发布'});});
+router.post('/assignments/:id/close',auth,teacherOnly,(req,res)=>{
+ db.transaction(()=>{const a=assignmentAccess(req.params.id,req.user,{write:true});if(a.status==='draft')fail(400,'草稿不能直接关闭');db.prepare("UPDATE assignments SET status='closed',updated_at=? WHERE id=?").run(nowText(),a.id);})();
+ res.json({message:'作业已关闭；待审批的延期申请保留，可拒绝但不可批准'});
 });
-
-router.delete('/assignments/:id', auth, teacherOnly, (req, res) => {
-  if (!ownAssignment(req.params.id, req.user.id)) return res.status(404).json({ message: '作业不存在' });
-  deleteAssignment(Number(req.params.id)); res.json({ message: '作业已删除' });
-});
-
-for (const [action, status] of [['publish','published'],['close','closed']]) router.post(`/assignments/:id/${action}`, auth, teacherOnly, (req, res) => {
-  if (!ownAssignment(req.params.id, req.user.id)) return res.status(404).json({ message: '作业不存在' });
-  db.prepare(`UPDATE assignments SET status=?,updated_at=datetime('now','localtime') WHERE id=?`).run(status, req.params.id);
-  res.json({ message: status === 'published' ? '作业已发布' : '作业已关闭' });
-});
-
 export default router;

@@ -4,6 +4,9 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import api, { messageOf } from '../../api/request.js';
 import { downloadBlob } from '../../utils/files.js';
+import SubmissionRecords from '../../components/SubmissionRecords.vue';
+import ExtensionsPanel from '../../components/ExtensionsPanel.vue';
+import AssignmentGroups from '../../components/AssignmentGroups.vue';
 import { readToken } from '../../utils/session.js';
 
 const route = useRoute();
@@ -21,7 +24,7 @@ const form = reactive({ score: null, comment: '', returned_reason: '' });
 const rows = computed(() => {
   const search = keyword.value.trim().toLowerCase();
   return allRows.value.filter(row => {
-    const matchesSearch = !search || row.username.toLowerCase().includes(search) || row.name.toLowerCase().includes(search);
+    const matchesSearch = !search || row.username.toLowerCase().includes(search) || row.name.toLowerCase().includes(search) || row.members?.some(m=>(m.name+' '+m.username).toLowerCase().includes(search));
     if (!matchesSearch) return false;
     if (filter.value === 'unsubmitted') return !row.id;
     if (filter.value === 'submitted') return row.id && row.status === 'submitted';
@@ -66,9 +69,9 @@ function open(row, type) {
 async function save() {
   try {
     if (mode.value === 'grade') {
-      await api.post(`/submissions/${current.value.id}/grade`, { score: form.score, comment: form.comment });
+      await api.post(current.value.api_base+'/grade', { score: form.score, comment: form.comment });
     } else {
-      await api.post(`/submissions/${current.value.id}/return`, { returned_reason: form.returned_reason });
+      await api.post(current.value.api_base+'/return', { returned_reason: form.returned_reason });
     }
     ElMessage.success(mode.value === 'grade' ? '批改已保存' : '作业已退回');
     dialog.value = false;
@@ -104,8 +107,8 @@ function rowFiles(row) {
 }
 
 async function downloadSingle(row, f) {
-  const url = f.history_id ? `/submissions/${row.id}/file?history_id=${f.history_id}` : `/submissions/${row.id}/file`;
-  const response = await api.get(url, { responseType: 'blob' });
+  const url = f.history_id ? `${row.api_base}/file?history_id=${f.history_id}` : `${row.api_base}/file`;
+  const response = await api.get(url, { responseType: 'blob',timeout:0 });
   downloadBlob(response.data, fileNameFor(row, f));
 }
 
@@ -126,11 +129,7 @@ async function download(row) {
 }
 
 function buildBulkEntries() {
-  return allRows.value.filter(row => row.id).map(row => ({
-    url: row.file_name ? `/api/submissions/${row.id}/file` : null,
-    fileName: bulkFileName(row),
-    content: row.file_name ? null : row.content || ''
-  }));
+  return allRows.value.filter(row=>row.id).flatMap(row=>rowFiles(row).map(f=>({url:f.file_name?`/api${row.api_base}/file${f.history_id?'?history_id='+f.history_id:''}`:null,fileName:fileNameFor(row,f),content:f.file_name?null:f.content||''})));
 }
 
 async function downloadInBrowser(entries) {
@@ -141,7 +140,7 @@ async function downloadInBrowser(entries) {
   );
   for (const entry of entries) {
     if (entry.url) {
-      const response = await api.get(entry.url.replace('/api', ''), { responseType: 'blob' });
+      const response = await api.get(entry.url.replace('/api', ''), { responseType: 'blob',timeout:0 });
       downloadBlob(response.data, entry.fileName);
     } else {
       downloadBlob(new Blob([entry.content], { type: 'text/plain;charset=utf-8' }), entry.fileName);
@@ -154,7 +153,7 @@ async function downloadAll() {
   bulkLoading.value = true;
   try {
     if (assignment.value.submission_mode === 'append') {
-      const response = await api.get(`/assignments/${route.params.id}/package`, { responseType: 'blob' });
+      const response = await api.get(`/assignments/${route.params.id}/package`, { responseType: 'blob',timeout:0 });
       downloadBlob(response.data, `${assignment.value.title}-全部作业.zip`);
       ElMessage.success(`已生成“${assignment.value.title}-全部作业.zip”压缩包`);
       return;
@@ -184,7 +183,7 @@ async function downloadAll() {
 
 async function exportExcel() {
   try {
-    const response = await api.get(`/assignments/${route.params.id}/export`, { responseType: 'blob' });
+    const response = await api.get(`/assignments/${route.params.id}/export`, { responseType: 'blob',timeout:0 });
     downloadBlob(response.data, `${assignment.value.title}-成绩表.xlsx`);
   } catch (error) {
     ElMessage.error(messageOf(error));
@@ -217,15 +216,16 @@ onMounted(load);
 
     <el-alert
       v-if="stats.unsubmitted > 0"
-      :title="`还有 ${stats.unsubmitted} 名学生未提交`"
+      :title="`还有 ${stats.unsubmitted} ${assignment.work_mode==='group'?'组':'名学生'}未提交`"
       type="warning"
       show-icon
       :closable="false"
       style="margin-bottom: 18px"
     />
 
+    <p v-if="assignment.work_mode==='group'" class="hint">成员覆盖：{{allRows.reduce((sum,r)=>sum+(r.members?.length||0),0)}}人。以下提交统计以组为单位。</p>
     <div class="stat-strip">
-      <div class="stat"><b>{{ stats.all }}</b><span>应交人数</span></div>
+      <div class="stat"><b>{{ stats.all }}</b><span>{{assignment.work_mode==='group'?'应交组数':'应交人数'}}</span></div>
       <div class="stat"><b>{{ stats.submitted }}</b><span>已提交</span></div>
       <div class="stat"><b>{{ stats.unsubmitted }}</b><span>未提交</span></div>
       <div class="stat"><b>{{ stats.graded }}</b><span>已评分</span></div>
@@ -245,7 +245,8 @@ onMounted(load);
       </div>
 
       <el-table :data="rows" stripe border>
-        <el-table-column prop="username" label="学号" width="130" />
+        <el-table-column prop="username" :label="assignment.work_mode==='group'?'小组':'学号'" width="150" />
+        <el-table-column v-if="assignment.work_mode==='group'" label="固定成员" min-width="180"><template #default="{row}">{{row.members?.map(m=>m.name+'（'+m.username+'）').join('、')}}</template></el-table-column>
         <el-table-column prop="name" label="姓名" width="110" />
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
@@ -255,6 +256,8 @@ onMounted(load);
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column v-if="assignment.work_mode==='group'" label="实际提交人" min-width="150"><template #default="{row}">{{row.submitted_by_name||'—'}} {{row.submitted_by_username||''}}</template></el-table-column>
+        <el-table-column prop="submit_count" label="次数" width="70"/>
         <el-table-column prop="submitted_at" label="提交时间" min-width="190">
           <template #default="{ row }">
             <span :class="{ late: row.is_late }">{{ row.submitted_at || '—' }} {{ row.is_late ? '（迟交）' : '' }}</span>
@@ -276,8 +279,8 @@ onMounted(load);
           <template #default="{ row }">
             <template v-if="row.id">
               <el-button v-if="rowFiles(row).length" link @click="download(row)">下载</el-button>
-              <el-button link type="primary" @click="open(row, 'grade')">评分</el-button>
-              <el-button link type="warning" @click="open(row, 'return')">退回</el-button>
+              <SubmissionRecords :api-base="row.api_base"/><el-button :disabled="assignment.course_status==='archived'" link type="primary" @click="open(row, 'grade')">评分</el-button>
+              <el-button :disabled="assignment.course_status==='archived'" link type="warning" @click="open(row, 'return')">退回</el-button>
             </template>
             <span v-else class="hint">等待提交</span>
           </template>
@@ -285,6 +288,8 @@ onMounted(load);
       </el-table>
     </div>
 
+    <AssignmentGroups v-if="assignment.work_mode==='group'" :assignment="assignment" :readonly="assignment.course_status==='archived'"/>
+    <ExtensionsPanel :assignment-id="route.params.id" :readonly="assignment.course_status==='archived'||assignment.status!=='published'" @changed="load"/>
     <el-dialog v-model="dialog" :title="mode === 'grade' ? `批改 · ${current.name}` : `退回 · ${current.name}`" width="min(520px, 92vw)">
       <el-form label-position="top">
         <template v-if="mode === 'grade'">

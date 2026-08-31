@@ -52,4 +52,4 @@ async function login() {
       </div>
     </section>
   </div>
-</template>
+<router-link to="/help" style="position:fixed;bottom:20px;right:24px;color:#15554e">登录帮助</router-link></template>

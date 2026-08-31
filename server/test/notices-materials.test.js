@@ -88,8 +88,8 @@ test('notices: teacher CRUD, student only sees published, permissions enforced',
   assert.equal(edit.status, 200);
   assert.equal(edit.body.status, 'published');
 
-  const del = await request(app).delete(`/api/notices/${published.body.id}`).set('Authorization', `Bearer ${teacherToken}`);
-  assert.equal(del.status, 200);
+  const withdrawn = await request(app).post(`/api/notices/${published.body.id}/withdraw`).set('Authorization', `Bearer ${teacherToken}`);
+  assert.equal(withdrawn.status, 200);
 
   addTeacher('otherteacher');
   const otherToken = await login('otherteacher');
@@ -99,7 +99,7 @@ test('notices: teacher CRUD, student only sees published, permissions enforced',
   const notOwnerList = await request(app).get(`/api/courses/${courseId}/notices`).set('Authorization', `Bearer ${otherToken}`);
   assert.equal(notOwnerList.status, 403, '非本课程教师不能查看');
   const notOwnerDelete = await request(app).delete(`/api/notices/${draft.body.id}`).set('Authorization', `Bearer ${otherToken}`);
-  assert.equal(notOwnerDelete.status, 404, '非本课程教师不能删除他人通知');
+  assert.equal(notOwnerDelete.status, 403, '非本课程教师不能删除他人通知');
   assert.equal(otherCourseId > 0, true);
 });
 

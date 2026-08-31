@@ -19,6 +19,6 @@ COPY --from=server-deps /deps/node_modules ./node_modules
 COPY server/ ./
 COPY --from=web-builder /build/web/dist /web/dist
 RUN mkdir -p /app/data /app/uploads
-ENV NODE_ENV=production PORT=3000 DATA_DIR=/app/data UPLOAD_DIR=/app/uploads
+ENV NODE_ENV=production PORT=3000 DATA_DIR=/app/data UPLOAD_DIR=/app/uploads TZ=Asia/Shanghai
 EXPOSE 3000
 CMD ["node", "src/index.js"]

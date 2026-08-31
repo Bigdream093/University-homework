@@ -13,6 +13,7 @@ export async function importStudents(buffer, courseId) {
   });
   const result = { created: 0, joined: 0, duplicated: 0, failed: [] };
   const run = transaction(() => {
+    if(db.prepare('SELECT status FROM courses WHERE id=?').get(courseId)?.status!=='active')throw Object.assign(new Error('课程已归档或不存在'),{status:409});
     const seen = new Set();
     const orderedRows = rows.filter(row => {
       if (!row.username || !row.name) {
@@ -35,7 +36,7 @@ export async function importStudents(buffer, courseId) {
       let user = db.prepare('SELECT * FROM users WHERE username=?').get(username);
       if (user?.role === 'teacher') return result.failed.push({ row: row.rowNumber, reason: '该账号为教师账号' });
       if (!user) {
-        const info = db.prepare(`INSERT INTO users(username,password_hash,name,role) VALUES(?,?,?,'student')`).run(username, bcrypt.hashSync('123456', 10), name);
+        const info = db.prepare(`INSERT INTO users(username,password_hash,name,role,created_at) VALUES(?,?,?,'student',datetime('now','+08:00'))`).run(username, bcrypt.hashSync('123456', 10), name);
         user = { id: info.lastInsertRowid };
         result.created++;
       }
@@ -45,7 +46,7 @@ export async function importStudents(buffer, courseId) {
         db.prepare('UPDATE course_students SET sort_order=? WHERE id=?').run(sortOrder, membership.id);
         result.duplicated++;
       } else {
-        db.prepare('INSERT INTO course_students(course_id,student_id,sort_order) VALUES(?,?,?)').run(courseId, user.id, sortOrder);
+        db.prepare('INSERT INTO course_students(course_id,student_id,sort_order,joined_at) VALUES(?,?,?,datetime(\'now\',\'+08:00\'))').run(courseId, user.id, sortOrder);
         result.joined++;
       }
     });

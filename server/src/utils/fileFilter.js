@@ -8,7 +8,7 @@ const allowedExtensions = new Set([
 export function fileFilter(_req, file, cb) {
   const ext = path.extname(file.originalname).slice(1).toLowerCase();
   const allowed = Boolean(ext && allowedExtensions.has(ext));
-  cb(allowed ? null : new Error(`不支持的文件类型：.${ext || '未知'}`), allowed);
+  cb(allowed ? null : Object.assign(new Error(`不支持的文件类型：.${ext || '未知'}`),{status:400}), allowed);
 }
 
 export function safeName(name) {

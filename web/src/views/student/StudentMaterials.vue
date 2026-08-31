@@ -17,7 +17,7 @@ async function load() {
 
 async function download(m) {
   try {
-    const response = await api.get(`/materials/${m.id}/file`, { responseType: 'blob' });
+    const response = await api.get(`/materials/${m.id}/file`, { responseType: 'blob',timeout:0 });
     downloadBlob(response.data, m.file_name || '资料');
   } catch (error) {
     ElMessage.error(messageOf(error));
@@ -35,6 +35,7 @@ onMounted(load);
       <el-table-column label="大小" width="100">
         <template #default="{ row }">{{ formatFileSize(row.file_size) }}</template>
       </el-table-column>
+      <el-table-column prop="download_count" label="下载次数" width="100" />
       <el-table-column prop="created_at" label="上传时间" width="180" />
       <el-table-column label="操作" width="100">
         <template #default="{ row }">

@@ -6,6 +6,7 @@ const routes = [
   { path: '/', redirect: '/login' },
   { path: '/login', component: LoginView, meta: { public: true } },
   { path: '/password', component: () => import('../views/PasswordView.vue') },
+  { path: '/help', component: () => import('../views/HelpView.vue'),meta:{public:true} },
   { path: '/teacher/courses', component: () => import('../views/teacher/TeacherCourses.vue'), meta: { role: 'teacher' } },
   { path: '/teacher/courses/:id', component: () => import('../views/teacher/CourseManage.vue'), meta: { role: 'teacher' } },
   { path: '/teacher/assignments/:id', component: () => import('../views/teacher/SubmissionsView.vue'), meta: { role: 'teacher' } },

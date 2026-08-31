@@ -45,7 +45,7 @@ test('uploaded display filename includes name, username, submission time and lat
 
 test('submission remains accepted after deadline and is marked late', () => {
   const { studentId, assignment } = createAssignment('2020-01-01 00:00:00');
-  const result = saveSubmission({ assignment, studentId, file: null, content: '迟交内容' });
+  const result = saveSubmission({ assignment, studentId, file: { path: 'late-internal-safe-path', originalname: '迟交.zip', size: 4 }, content: '' });
   assert.equal(result.status, 'submitted');
   assert.equal(result.is_late, 1);
 });
@@ -75,6 +75,7 @@ test('a new uploaded file replaces and removes the previous physical file', () =
   assert.equal(second.file_url, latestPath);
   assert.equal(fs.existsSync(previousPath), false);
   assert.equal(fs.existsSync(latestPath), true);
-  const history = db.prepare('SELECT file_url FROM submission_history WHERE submission_id=? ORDER BY id').all(second.id);
-  assert.deepEqual(history.map(row => row.file_url), [null, latestPath]);
+  const history = db.prepare('SELECT file_url,file_state FROM submission_history WHERE submission_id=? ORDER BY id').all(second.id);
+  assert.deepEqual(history.map(row => row.file_state), ['replaced', 'available']);
+  assert.deepEqual(history.map(row => row.file_url), [previousPath, latestPath]);
 });

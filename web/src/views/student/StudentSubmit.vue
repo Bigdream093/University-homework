@@ -3,11 +3,18 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import api, { messageOf } from '../../api/request.js';
+import SubmissionRecords from '../../components/SubmissionRecords.vue';
+import ExtensionsPanel from '../../components/ExtensionsPanel.vue';
+import { useUpload } from '../../composables/useUpload.js';
 import { createServerClock, deadlineState } from '../../utils/deadline.js';
 
 const route = useRoute();
 const router = useRouter();
 const assignment = ref({});
+const context=ref({});
+const upload=useUpload();
+const {busy:uploadBusy,percent:uploadPercent,state:uploadState,loaded:uploadLoaded,total:uploadTotal}=upload;
+const canSubmit=computed(()=>context.value.can_submit && (assignment.value.allow_resubmit_count===-1 || (submission.value?.submit_count||0)<assignment.value.allow_resubmit_count+1));
 const submission = ref(null);
 const content = ref('');
 const file = ref(null);
@@ -18,7 +25,7 @@ const currentTime = ref(Date.now());
 let serverClock = () => Date.now();
 let clockTimer;
 
-const deadline = computed(() => deadlineState(assignment.value.deadline, currentTime.value));
+const deadline = computed(() => deadlineState(context.value.effective_deadline, currentTime.value));
 const fileSizeLabel = computed(() => {
   const mb = assignment.value.max_file_mb || 200;
   return mb >= 1024 ? '1G' : `${mb}M`;
@@ -26,11 +33,13 @@ const fileSizeLabel = computed(() => {
 
 async function load() {
   try {
-    const [assignmentResponse, submissionResponse] = await Promise.all([
+    const [assignmentResponse, submissionResponse, contextResponse] = await Promise.all([
       api.get(`/assignments/${route.params.id}`),
-      api.get(`/assignments/${route.params.id}/my-submission`)
+      api.get(`/assignments/${route.params.id}/my-submission`),
+      api.get(`/assignments/${route.params.id}/submission-context`)
     ]);
     assignment.value = assignmentResponse.data;
+    context.value=contextResponse.data;
     submission.value = submissionResponse.data;
     content.value = submission.value?.content || '';
     serverClock = createServerClock(assignment.value.server_now);
@@ -101,7 +110,7 @@ async function submit() {
   formData.append('content', content.value);
 
   try {
-    const response = await api.post(`/assignments/${route.params.id}/submit`, formData, { timeout: 0 });
+    const response = {data:await upload.run({url:`/assignments/${route.params.id}/submit`,statusUrl:`/assignments/${route.params.id}/upload-status/`,fields:{content:content.value,base_version:submission.value?.submit_count||0},file:file.value})};
     await ElMessageBox.alert(
       response.data.is_late ? '已经提交成功。本次提交已超过截止时间，系统已标记为“迟交”，老师可以看到。' : '已经提交成功。',
       '提交成功',
@@ -119,7 +128,7 @@ async function submit() {
 async function showHistory() {
   if (!submission.value) return;
   try {
-    history.value = (await api.get(`/submissions/${submission.value.id}/history`)).data;
+    history.value = (await api.get(submission.value.api_base+'/history')).data;
     historyDialog.value = true;
   } catch (error) {
     ElMessage.error(messageOf(error));
@@ -142,9 +151,9 @@ onUnmounted(() => window.clearInterval(clockTimer));
       <div>
         <el-button text @click="router.push(`/student/courses/${assignment.course_id || ''}`)">← 课程作业</el-button>
         <h1>{{ assignment.title || '作业详情' }}</h1>
-        <p>{{ assignment.course_name }} · 截止 {{ assignment.deadline || '不限' }}</p>
+        <p>{{ assignment.course_name }} · 有效截止 {{ context.effective_deadline || '不限' }}</p>
       </div>
-      <el-button v-if="submission" @click="showHistory">提交历史</el-button>
+      <SubmissionRecords v-if="submission" :api-base="submission.api_base"/>
     </div>
 
     <el-alert
@@ -166,6 +175,8 @@ onUnmounted(() => window.clearInterval(clockTimer));
       style="margin-bottom: 18px"
     />
 
+    <el-alert v-if="!context.can_submit" :title="context.not_assigned?'本次作业未安排你参与':assignment.course_status==='archived'?'课程已归档，只可查看历史':assignment.status!=='published'?'作业已关闭':'本组由指定成员提交，你可以查看本组历史与回执'" type="info" :closable="false"/>
+    <section v-if="context.group" class="panel" style="margin:16px 0"><h3>本次作业小组：{{context.group.name}}</h3><p>{{context.members?.map(m=>m.name+'（'+m.username+'）').join('、')}}</p><p>全组共用提交次数和成果。</p></section>
     <div class="detail-grid">
       <section class="panel">
         <span class="badge">{{ assignment.type === 'online' ? '在线作答' : '文件作业' }}</span>
@@ -198,7 +209,7 @@ onUnmounted(() => window.clearInterval(clockTimer));
             :closable="false"
           />
           <div style="margin: 16px 0" class="hint">
-            最近提交：{{ submission.submitted_at }}<br>
+            最近提交：{{ submission.submitted_at }}<br><template v-if="context.group">实际提交人：{{submission.submitted_by_name}}（{{submission.submitted_by_username}}）<br></template>
             文件：{{ submission.file_name || '在线作答' }}<br>
             提交次数：{{ submission.submit_count }}
             <span v-if="submission.is_late" class="late"> · 迟交</span>
@@ -206,6 +217,7 @@ onUnmounted(() => window.clearInterval(clockTimer));
         </template>
 
         <h3>{{ submission ? '重新提交' : '提交作业' }}</h3>
+        <p v-if="!canSubmit" class="hint">当前不可提交：请检查权限、作业开放状态和剩余次数。</p>
         <el-alert
           v-if="submission?.file_name && assignment.type !== 'online'"
           :title="assignment.submission_mode === 'append' ? '重新提交的文件会作为补充保留，不会覆盖原文件' : '重新提交的新文件会替换上一次文件'"
@@ -217,12 +229,13 @@ onUnmounted(() => window.clearInterval(clockTimer));
         <el-input
           v-if="assignment.type === 'online'"
           v-model="content"
+          :disabled="loading||!canSubmit"
           type="textarea"
           :rows="8"
           placeholder="在此输入作答内容"
         />
         <template v-else>
-          <input id="file" type="file" hidden @change="onFileChange">
+          <input id="file" type="file" hidden :disabled="loading||!canSubmit" @change="onFileChange">
           <label
             for="file"
             style="display: block; border: 1px dashed #9bb8b2; border-radius: 14px; padding: 30px 15px; text-align: center; cursor: pointer; background: #f7fbf9"
@@ -239,14 +252,18 @@ onUnmounted(() => window.clearInterval(clockTimer));
           size="large"
           style="width: 100%; margin-top: 16px"
           :loading="loading"
+          :disabled="!canSubmit"
           @click="submit"
         >
-          {{ deadline.kind === 'late' ? '仍要迟交' : '确认提交' }}
+          {{uploadState.includes('失败')||uploadState.includes('待确认')?'查询 / 重试':deadline.kind === 'late' ? '仍要迟交' : '确认提交'}}
         </el-button>
-        <p class="hint">提交时间和迟交状态以服务器记录为准。</p>
+        <el-progress v-if="uploadState" :percentage="uploadPercent" :indeterminate="!uploadTotal&&uploadBusy"/><p v-if="uploadState" class="hint">已传 {{(uploadLoaded/1024/1024).toFixed(1)}} MB / {{uploadTotal?(uploadTotal/1024/1024).toFixed(1)+' MB':'总大小待确认'}}</p><p role="status">{{uploadState}}</p><el-button v-if="uploadBusy" @click="upload.cancel">取消等待并查询</el-button>
+        <p class="hint">提交时间和迟交状态以服务器记录为准。上传100%后仍须等待保存。刷新页面后如需重试，请重新选择同一文件。</p>
       </aside>
     </div>
 
+    <ExtensionsPanel :assignment-id="route.params.id" :can-apply="context.can_submit && !!assignment.deadline" :readonly="assignment.course_status==='archived'||assignment.status!=='published'" @changed="load"/>
+    <router-link to="/help#student-submit">提交、重试与回执说明</router-link>
     <el-dialog v-model="historyDialog" title="提交历史" width="min(620px,94vw)">
       <el-timeline>
         <el-timeline-item
