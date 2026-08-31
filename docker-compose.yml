@@ -1,8 +1,8 @@
 services:
-  hw-app:
+  university-homework:
     build: .
-    image: hw-app:latest
-    container_name: hw-app
+    image: university-homework:latest
+    container_name: university-homework
     restart: unless-stopped
     ports:
       - "34567:3000"

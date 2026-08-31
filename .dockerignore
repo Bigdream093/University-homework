@@ -12,3 +12,5 @@ uploads/
 desktop/
 release/
 backups/
+.mimosa/
+**/.mimosa/

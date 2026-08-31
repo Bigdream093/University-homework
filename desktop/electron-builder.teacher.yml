@@ -2,7 +2,7 @@ appId: com.kexu.homework.teacher
 productName: 墨痕教师端
 copyright: Copyright © 2026 墨痕
 extraMetadata:
-  name: kexu-teacher
+  name: university-homework-teacher
   clientRole: teacher
 directories:
   output: release/teacher

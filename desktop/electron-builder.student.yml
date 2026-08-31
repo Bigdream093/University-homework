@@ -2,7 +2,7 @@ appId: com.kexu.homework.student
 productName: 墨痕学生端
 copyright: Copyright © 2026 墨痕
 extraMetadata:
-  name: kexu-student
+  name: university-homework-student
   clientRole: student
 directories:
   output: release/student

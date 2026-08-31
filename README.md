@@ -1,4 +1,6 @@
-# 墨痕 · 高校作业管理 App
+# university-homework · 墨痕高校作业管理 App
+
+项目目录、npm 包前缀及 Docker 服务/容器/镜像统一使用 `university-homework`。中文产品名“墨痕”、已有客户端安装标识、登录存储键和数据库文件名保持兼容，不随工程改名改变。
 
 面向单教师、约300名学生的轻量作业管理系统。支持课程与名单管理、Excel原序导入、作业发布、文件/在线提交、文件名自动规范化、截止前24小时提醒、迟交确认与标记、重交替换、教师筛选批改、退回和成绩表导出。
 
@@ -46,7 +48,9 @@ Excel 第一行是表头，A列为学号，B列为姓名，从第二行开始读
 2. 运行 `docker compose up -d --build`。
 3. 访问 `http://NAS地址:34567`。
 
-非技术用户可直接查看项目根目录中的 `绿联NAS部署说明.txt`（发布包在根目录 `发布/` 文件夹）。除了浏览器访问，另提供教师端、学生端 Windows 桌面安装包（Electron 封装，位于 `desktop/release/`），安装后填写 NAS 服务器地址即可使用。
+离线发布包位于 `release/`，请按其中的 `NAS部署说明.txt` 导入 `university-homework-2026.09-linux-amd64.tar`，配套使用 `release/docker-compose.yml`。教师端、学生端安装包也位于 `release/`，安装后填写 NAS 服务地址即可使用。发布目录不提交 Git；源码构建使用根目录 Compose，勿与离线版混用。
+
+已有 NAS 改名升级时，先用旧配置停止原项目并备份，再切换新服务名；保留原实际数据挂载和 `.env`，无需同时给 NAS 数据目录改名。旧容器需保持停止，不能让新旧服务同时写入同一数据库。详见[维护说明](server/help/maintenance.md)。
 
 Docker数据库保存在 `data/`，附件保存在 `uploads/`；本地开发默认在 `server/data/`、`server/uploads/`。备份前停止写入，保存数据库（含存在的WAL/SHM）、全部附件、配置及对应镜像/代码版本。正式暴露到公网前应配置 HTTPS，并关闭路由器公网管理入口。
 
