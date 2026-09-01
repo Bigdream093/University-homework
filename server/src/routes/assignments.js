@@ -7,6 +7,8 @@ import { courseAccess,assignmentAccess,subjectFor,textValue,fail } from '../serv
 import { nowText,validTime } from '../utils/time.js';
 import { effectiveDeadline } from '../services/extensions.js';
 const router=Router();
+function hasSubmissions(id){return !!(db.prepare('SELECT 1 FROM submissions WHERE assignment_id=? LIMIT 1').get(id)||db.prepare('SELECT 1 FROM group_submissions s JOIN assignment_groups g ON g.id=s.assignment_group_id WHERE g.assignment_id=? LIMIT 1').get(id));}
+function highestScore(id){return db.prepare(`SELECT MAX(score) value FROM (SELECT score FROM submissions WHERE assignment_id=? UNION ALL SELECT s.score FROM group_submissions s JOIN assignment_groups g ON g.id=s.assignment_group_id WHERE g.assignment_id=?)`).get(id,id).value;}
 function values(body,current={}){
  const a={...current,...body};
  const title=textValue(a.title,'作业标题',200),deadline=a.deadline||null,max=Number(a.max_file_mb??200),score=Number(a.total_score??100),allowed=Number(a.allow_resubmit_count??1);
@@ -16,6 +18,10 @@ function values(body,current={}){
  const work=a.work_mode??'individual',policy=a.group_submit_policy??'designated',mode=a.submission_mode??'overwrite',type=a.type??'document';
  if(!['individual','group'].includes(work)||!['designated','any'].includes(policy)||!['overwrite','append'].includes(mode)||!['document','image','video','online'].includes(type))fail(400,'作业设置无效');
  if(current.id&&(current.status!=='draft'||current.groups_locked||db.prepare('SELECT 1 FROM submissions WHERE assignment_id=?').get(current.id))&&work!==current.work_mode)fail(400,'已发布或已有提交的作业不能改变个人/分组类型');
+ if(current.id&&hasSubmissions(current.id)){
+  if(type!==current.type||mode!==current.submission_mode||max!==current.max_file_mb)fail(409,'已有学生提交，不能修改作业类型、提交模式或文件大小上限');
+  const gradedMax=highestScore(current.id);if(gradedMax!==null&&score<gradedMax)fail(409,`满分不能低于已有最高成绩 ${gradedMax}`);
+ }
  return [title,textValue(a.description,'作业要求',20000,false),type,deadline,score,allowed,mode,max,work,policy];
 }
 function publish(a){
@@ -53,8 +59,8 @@ router.post('/courses/:id/assignments',auth,teacherOnly,(req,res)=>{
 });
 router.put('/assignments/:id',auth,teacherOnly,(req,res)=>{
  const a=assignmentAccess(req.params.id,req.user,{write:true}),v=values(req.body,a);
- db.prepare('UPDATE assignments SET title=?,description=?,type=?,deadline=?,total_score=?,allow_resubmit_count=?,submission_mode=?,max_file_mb=?,work_mode=?,group_submit_policy=?,updated_at=? WHERE id=?').run(...v,nowText(),a.id);
- res.json(db.prepare('SELECT * FROM assignments WHERE id=?').get(a.id));
+ const at=nowText(),cancelled=db.transaction(()=>{db.prepare('UPDATE assignments SET title=?,description=?,type=?,deadline=?,total_score=?,allow_resubmit_count=?,submission_mode=?,max_file_mb=?,work_mode=?,group_submit_policy=?,updated_at=? WHERE id=?').run(...v,at,a.id);return a.deadline&&!v[3]?db.prepare("UPDATE extension_requests SET status='cancelled',decision_reason='作业截止时间已清空',decided_at=? WHERE assignment_id=? AND status='pending'").run(at,a.id).changes:0;})();
+ res.json({...db.prepare('SELECT * FROM assignments WHERE id=?').get(a.id),cancelled_extension_count:cancelled});
 });
 router.delete('/assignments/:id',auth,teacherOnly,(req,res)=>{const a=assignmentAccess(req.params.id,req.user,{write:true});deleteAssignment(a.id);res.json({message:'作业已删除'});});
 router.post('/assignments/:id/publish',auth,teacherOnly,(req,res)=>{db.transaction(()=>publish(assignmentAccess(req.params.id,req.user,{write:true})))();res.json({message:'作业已发布'});});

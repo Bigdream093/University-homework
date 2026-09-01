@@ -11,6 +11,7 @@ const materials = ref([]);
 const dialog = ref(false);
 const editId = ref(null);
 const form = ref({ title: '', description: '', file: null });
+const MATERIAL_MAX_BYTES = 10 * 1024 ** 3;
 const uploading = ref(false);
 const upload=useUpload(),{percent,state,busy,loaded,total}=upload;
 const readers=ref([]),readersDialog=ref(false);
@@ -37,6 +38,10 @@ async function save() {
   }
   if (!editId.value && !form.value.file) {
     ElMessage.warning('请选择要上传的资料文件');
+    return;
+  }
+  if (form.value.file?.size > MATERIAL_MAX_BYTES) {
+    ElMessage.warning('课程资料单文件不能超过10GB');
     return;
   }
   uploading.value = true;
@@ -83,7 +88,7 @@ useRefresh(load);
   <div>
     <div class="toolbar">
       <el-button type="primary" color="#15554e" :disabled="readonly" @click="open()">上传资料</el-button>
-      <span class="hint">支持文档、图片、视频、设计源文件和压缩包</span>
+      <span class="hint">支持文档、图片、视频、设计源文件和压缩包，单文件最多10GB</span>
     </div>
     <el-table v-if="materials.length" :data="materials" stripe border>
       <el-table-column prop="title" label="标题" min-width="180" />

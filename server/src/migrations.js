@@ -57,4 +57,10 @@ export function migrate(db) {
     db.exec("UPDATE assignments SET max_file_mb=200 WHERE max_file_mb IS NULL; UPDATE assignments SET groups_locked=1 WHERE status IN ('published','closed');");
     db.prepare('INSERT INTO schema_migrations(version,applied_at) VALUES(?,?)').run('2026-09-validation',nowText());
   })();
+  db.transaction(()=>{
+    if(db.prepare('SELECT 1 FROM schema_migrations WHERE version=?').get('2026-09-question-publication-policy'))return;
+    // Student questions and replies stay private, but students no longer veto a teacher-authored public summary.
+    db.exec('UPDATE course_questions SET must_private=0 WHERE must_private<>0');
+    db.prepare('INSERT INTO schema_migrations(version,applied_at) VALUES(?,?)').run('2026-09-question-publication-policy',nowText());
+  })();
 }

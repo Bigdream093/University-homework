@@ -10,13 +10,15 @@ import { executeOperation,operationStatus } from '../services/operations.js';
 import { queueCleanup,flushCleanup } from '../services/storage.js';
 import { serveMaterialFile } from '../services/materialFileService.js';
 import { nowText } from '../utils/time.js';
+import { config } from '../config.js';
 const router=Router();
+function limitMaterialUpload(req,_res,next){req.uploadLimit=config.materialUploadMaxMb*1024*1024;req.uploadLabel='课程资料';next();}
 function material(id,user,write=false){
  const m=db.prepare('SELECT * FROM materials WHERE id=?').get(id);if(!m)fail(404,'资料不存在');courseAccess(m.course_id,user,{write});return m;
 }
 function view(id){return db.prepare('SELECT m.id,m.title,m.description,m.file_name,m.file_size,m.file_type,m.created_at,COALESCE((SELECT SUM(download_count) FROM material_downloads d WHERE d.material_id=m.id),0) download_count FROM materials m WHERE m.id=?').get(id);}
 router.get('/courses/:id/materials',auth,(req,res)=>{const c=courseAccess(req.params.id,req.user);res.json(db.prepare('SELECT id FROM materials WHERE course_id=? ORDER BY id DESC').all(c.id).map(m=>view(m.id)));});
-router.post('/courses/:id/materials',auth,teacherOnly,(req,res,next)=>{courseAccess(req.params.id,req.user,{write:true});next();},uploadSingle,async(req,res)=>{
+router.post('/courses/:id/materials',auth,teacherOnly,(req,res,next)=>{courseAccess(req.params.id,req.user,{write:true});next();},limitMaterialUpload,uploadSingle,async(req,res)=>{
  try{
  const c=courseAccess(req.params.id,req.user,{write:true});
  const data=await executeOperation(req,'material-create',c.id,()=>{
@@ -25,7 +27,7 @@ router.post('/courses/:id/materials',auth,teacherOnly,(req,res,next)=>{courseAcc
  });res.status(data.replayed?200:201).json(data);
  }catch(error){if(req.file){queueCleanup([req.file.path],'失败上传');flushCleanup();}throw error;}
 });
-router.put('/materials/:id',auth,teacherOnly,(req,res,next)=>{material(req.params.id,req.user,true);next();},uploadSingle,async(req,res)=>{
+router.put('/materials/:id',auth,teacherOnly,(req,res,next)=>{material(req.params.id,req.user,true);next();},limitMaterialUpload,uploadSingle,async(req,res)=>{
  try{
  const m=material(req.params.id,req.user,true),data=await executeOperation(req,'material-update',m.id,()=>{
  const current=material(m.id,req.user,true),f=req.file;

@@ -13,7 +13,7 @@ const {db}=await import('../src/db.js');
 const {nowText,isLate,validTime}=await import('../src/utils/time.js');
 const {publishDueNotices}=await import('../src/services/noticeService.js');
 const {recoverOperations}=await import('../src/services/operations.js');
-const {quarantineOrphans}=await import('../src/services/storage.js');
+const {quarantineOrphans,purgeExpiredQuarantine}=await import('../src/services/storage.js');
 after(()=>{db.close();fs.rmSync(dir,{recursive:true,force:true});});
 const tokens={};
 async function login(name){if(!tokens[name]){const r=await request(app).post('/api/auth/login').send({username:name,password:'123456'});assert.equal(r.status,200,r.text);tokens[name]=r.body.token;}return tokens[name];}
@@ -79,22 +79,24 @@ test('F08 scheduling catchup is bounded, idempotent and preserves intended time 
  for(let i=0;i<105;i++)add.run(c.id,c.teacher_id,scheduled,nowText(),nowText());
  assert.equal(publishDueNotices(),100);assert.equal(publishDueNotices(),5);assert.equal(publishDueNotices(),0);
 });
-test('F09 private original/replies never leak through opt-in; public summary retracts on privacy tightening',async()=>{
- const {c}=await fixture(),q=await call('alice','post','/courses/'+c.id+'/questions',{title:'私人原题',content:'私人健康情况',must_private:false},201);
+test('F09 private original/replies and student identity never leak; teacher controls public summaries',async()=>{
+ const {c}=await fixture(),q=await call('alice','post','/courses/'+c.id+'/questions',{title:'私人原题',content:'私人健康情况',must_private:true},201);
+ assert.equal(db.prepare('SELECT must_private FROM course_questions WHERE id=?').get(q.id).must_private,0);
  assert.equal((await call('bob','get','/courses/'+c.id+'/questions')).length,0);
  await call('bob','get','/questions/'+q.id,undefined,404);
+ await call('alice','put','/questions/'+q.id+'/privacy',{must_private:true},404);
  await call('teacher','post','/questions/'+q.id+'/replies',{content:'私人答复'},201);
  await call('teacher','post','/questions/'+q.id+'/publish',{summary:'公开学习问题',reply:'公开说明'},201);
- const pub=await call('bob','get','/courses/'+c.id+'/questions/public');assert.equal(pub.length,1);assert.ok(!JSON.stringify(pub).includes('私人'));
+ const pub=await call('bob','get','/courses/'+c.id+'/questions/public');assert.equal(pub.length,1);assert.ok(!JSON.stringify(pub).includes('私人'));assert.equal(pub[0].student_name,undefined);
  await call('alice','post','/questions/'+q.id+'/replies',{content:'新的秘密追问'},201);
  assert.ok(!JSON.stringify(await call('bob','get','/courses/'+c.id+'/questions/public')).includes('秘密'));
  await call('alice','put','/questions/'+q.id,{title:'改写',content:'改写'},409);
+ await call('teacher','put','/questions/'+q.id+'/manage',{status:'resolved'});
+ await call('teacher','post','/questions/'+q.id+'/publish',{summary:'更新后的公开摘要',reply:'更新后的公开答复'},201);
+ const updated=await call('bob','get','/courses/'+c.id+'/questions/public');assert.equal(updated.length,1);assert.equal(updated[0].summary,'更新后的公开摘要');
  await call('teacher','post','/courses/'+c.id+'/archive');
- await call('alice','put','/questions/'+q.id+'/privacy',{must_private:true});
- assert.equal((await call('bob','get','/courses/'+c.id+'/questions/public')).length,0);
- await call('alice','put','/questions/'+q.id+'/privacy',{must_private:false},409);
+ await call('teacher','post','/questions/'+q.id+'/publish',{summary:'归档后更新',reply:'不允许'},409);
  await call('teacher','post','/courses/'+c.id+'/restore');
- await call('teacher','post','/questions/'+q.id+'/publish',{summary:'强制公开',reply:'不可以'},400);
  await call('teacher','delete','/courses/'+c.id+'/students/'+db.prepare("SELECT id FROM users WHERE username='alice'").get().id);
  await call('alice','get','/questions/'+q.id,undefined,403);
 });
@@ -127,6 +129,35 @@ test('F10 concurrent same key saves once; changed file bytes conflict and no fai
  assert.equal(fs.readdirSync(path.join(process.env.UPLOAD_DIR,'.staging')).length,0);
  const next=await upload('second-file-key','CCC');assert.equal(next.status,201,next.text);assert.equal(fs.existsSync(row.file_url),false);
  const receipts=await call('alice','get','/submissions/'+row.id+'/receipts');assert.equal(receipts[1].snapshot.file_state,'available');assert.equal(receipts[1].current_file_state,'replaced');
+});
+
+test('release guards cover assignment edits, deadline clearing, statistics, duplicate history id and quarantine expiry',async()=>{
+ const {c,alice}=await fixture(),a=await assignment(c),submitted=await submit('alice',a,'release-guard-submit','初稿');
+ assert.equal(submitted.status,201,submitted.text);await call('teacher','post',submitted.body.api_base+'/grade',{score:90});
+ await call('teacher','put','/assignments/'+a.id,{total_score:89},409);
+ await call('teacher','put','/assignments/'+a.id,{type:'document'},409);
+ const extension=await call('alice','post','/assignments/'+a.id+'/extensions',{reason:'需要更多时间',requested_deadline:'2099-01-02 00:00:00'},201);
+ const cleared=await call('teacher','put','/assignments/'+a.id,{deadline:null});assert.equal(cleared.cancelled_extension_count,1);
+ assert.equal(db.prepare('SELECT status FROM extension_requests WHERE id=?').get(extension.id).status,'cancelled');
+ const history=db.prepare('SELECT id FROM submission_history WHERE submission_id=?').get(submitted.body.id);
+ await call('teacher','get',submitted.body.api_base+`/file?history_id=${history.id}&history_id=${history.id}`,undefined,400);
+
+ const notice=await call('teacher','post','/courses/'+c.id+'/notices',{title:'统计通知',content:'正文',status:'published'},201);
+ await call('alice','post','/notices/'+notice.id+'/read',{revision:1});
+ assert.equal((await call('teacher','get','/courses/'+c.id+'/notices')).find(row=>row.id===notice.id).read_count,1);
+ await call('teacher','delete','/courses/'+c.id+'/students/'+alice);
+ assert.equal((await call('teacher','get','/courses/'+c.id+'/notices')).find(row=>row.id===notice.id).read_count,0);
+ assert.equal((await call('teacher','get','/notices/'+notice.id+'/readers')).length,0);
+
+ const grouped=await groupFixture(),groupSubmission=await submit('alice',grouped.a,'group-stat-submit','小组答案');assert.equal(groupSubmission.status,201,groupSubmission.text);
+ const students=await call('teacher','get','/courses/'+grouped.c.id+'/students');
+ assert.equal(students.find(row=>row.username==='alice').submission_count,1);
+ assert.equal(students.find(row=>row.username==='bob').submission_count,1);
+
+ const quarantineDir=path.join(process.env.UPLOAD_DIR,'.quarantine');fs.mkdirSync(quarantineDir,{recursive:true});
+ const expired=path.join(quarantineDir,'expired.bin');fs.writeFileSync(expired,'old');
+ const quarantineId=db.prepare("INSERT INTO storage_quarantine(original_path,quarantine_path,quarantined_at) VALUES(?,?,datetime('now','+08:00','-31 days'))").run(expired,expired).lastInsertRowid;
+ assert.equal(purgeExpiredQuarantine().removed,1);assert.equal(fs.existsSync(expired),false);assert.ok(db.prepare('SELECT deleted_at FROM storage_quarantine WHERE id=?').get(quarantineId).deleted_at);
 });
 test('F11 snapshot required, group permission, member reads, version conflict, privacy, frozen export',async()=>{
  const f=await groupFixture(),{a,c,alice,bob,cara,g}=f;
@@ -173,7 +204,7 @@ test('F12 help role checks apply to search, direct chapters and downloads; publi
  await call('alice','get','/help/maintenance',undefined,404);
  assert.deepEqual(await call('alice','get','/help?q=docker'),[]);
  const teacher=await call('teacher','get','/help/maintenance');assert.ok(teacher.body.includes('docker compose'));
- const dl=await request(app).get('/api/help/download').set('Authorization','Bearer '+await login('alice'));assert.equal(dl.status,200);assert.ok(!dl.text.includes('JWT_SECRET'));assert.ok(dl.text.includes('私人问答'));
+ const dl=await request(app).get('/api/help/download').set('Authorization','Bearer '+await login('alice'));assert.equal(dl.status,200);assert.ok(!dl.text.includes('JWT_SECRET'));assert.ok(dl.text.includes('课程提问'));
 });
 test('time boundaries, interrupted requests recover and unknown files quarantine without deleting referenced files',()=>{
  assert.equal(isLate('2026-08-31 12:00:00','2026-08-31 12:00:00'),0);

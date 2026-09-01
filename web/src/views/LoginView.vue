@@ -1,6 +1,6 @@
 <script setup>
 import { computed, reactive, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useUserStore } from '../stores/user.js';
 import { messageOf } from '../api/request.js';
@@ -8,6 +8,7 @@ import { messageOf } from '../api/request.js';
 const form = reactive({ username: '', password: '' });
 const loading = ref(false);
 const router = useRouter();
+const route = useRoute();
 const store = useUserStore();
 const clientRole = /KexuTeacher/i.test(navigator.userAgent)
   ? 'teacher'
@@ -24,7 +25,9 @@ async function login() {
       ElMessage.error(`该账号不能登录墨痕${clientName.value}`);
       return;
     }
-    router.push(user.role === 'teacher' ? '/teacher/courses' : '/student/courses');
+    const requested = typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/') && !route.query.redirect.startsWith('//') && !route.query.redirect.startsWith('/login') ? route.query.redirect : '';
+    if (user.must_change_password) router.push({ path: '/password', query: requested ? { redirect: requested } : {} });
+    else router.push(requested || (user.role === 'teacher' ? '/teacher/courses' : '/student/courses'));
   } catch (error) {
     ElMessage.error(messageOf(error));
   } finally {

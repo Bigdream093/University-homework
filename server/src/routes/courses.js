@@ -10,8 +10,11 @@ import { courseAccess,fail } from '../services/access.js';
 import { nowText } from '../utils/time.js';
 import { publishDueNotices } from '../services/noticeService.js';
 import { asyncRoute } from '../middleware/error.js';
+import { clientAddress,createFailureLimiter,rejectLimited } from '../services/attemptLimiter.js';
 
 const router = Router();
+const inviteIdentityAttempts=createFailureLimiter({maxFailures:8,baseDelayMs:1000,lockMs:15*60*1000});
+const inviteAddressAttempts=createFailureLimiter({maxFailures:30,baseDelayMs:0,lockMs:15*60*1000});
 const memoryUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const ownCourse = (id, teacherId) => courseAccess(id,{id:teacherId,role:'teacher'},{write:true});
 const visibleCourse=c=>({...c,invite_code:c.status==='active'?c.invite_code:null});
@@ -80,7 +83,8 @@ router.post('/courses/:id/students/import', auth, teacherOnly, memoryUpload.sing
 router.get('/courses/:id/students', auth, teacherOnly, (req, res) => {
   if (!courseAccess(req.params.id, req.user)) return res.status(404).json({ message: '课程不存在' });
   res.json(db.prepare(`SELECT u.id,u.username,u.name,u.status,cs.joined_at,
-    (SELECT count(*) FROM submissions s JOIN assignments a ON a.id=s.assignment_id WHERE a.course_id=cs.course_id AND s.student_id=u.id) submission_count
+    ((SELECT count(*) FROM submissions s JOIN assignments a ON a.id=s.assignment_id WHERE a.course_id=cs.course_id AND s.student_id=u.id)
+    +(SELECT count(*) FROM group_submissions gs JOIN assignment_groups ag ON ag.id=gs.assignment_group_id JOIN assignments a ON a.id=ag.assignment_id JOIN assignment_group_members gm ON gm.assignment_group_id=ag.id WHERE a.course_id=cs.course_id AND gm.student_id=u.id)) submission_count
     FROM course_students cs JOIN users u ON u.id=cs.student_id WHERE cs.course_id=?
     ORDER BY COALESCE(cs.sort_order, cs.id), cs.id`).all(req.params.id));
 });
@@ -131,8 +135,12 @@ router.get('/my/courses', auth, studentOnly, (req, res) => {
 });
 
 router.post('/courses/join', auth, studentOnly, (req, res) => {
+  const address=clientAddress(req),identityKey=`${address}:${req.user.id}`;
+  const identityGate=inviteIdentityAttempts.check(identityKey),addressGate=inviteAddressAttempts.check(address);
+  if(!identityGate.allowed||!addressGate.allowed)return rejectLimited(res,Math.max(identityGate.retryAfter,addressGate.retryAfter));
   const course = db.prepare('SELECT * FROM courses WHERE invite_code=?').get(String(req.body.invite_code || '').trim().toUpperCase());
-  if (!course) return res.status(404).json({ message: '邀请码无效' });
+  if (!course) {inviteIdentityAttempts.fail(identityKey);inviteAddressAttempts.fail(address);return res.status(404).json({ message: '邀请码无效' });}
+  inviteIdentityAttempts.success(identityKey);
   if (course.status !== 'active') return res.status(400).json({ message: '课程已归档，不能加入' });
   const nextOrder = db.prepare('SELECT COALESCE(MAX(sort_order),0)+1 value FROM course_students WHERE course_id=?').get(course.id).value;
   const info = db.prepare('INSERT OR IGNORE INTO course_students(course_id,student_id,sort_order,joined_at) VALUES(?,?,?,datetime(\'now\',\'+08:00\'))').run(course.id, req.user.id, nextOrder);

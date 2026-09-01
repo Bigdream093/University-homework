@@ -18,7 +18,8 @@ const router = createRouter({ history: createWebHistory(), routes, scrollBehavio
 router.beforeEach(to => {
   if (to.meta.public) return true;
   const user = readUser();
-  if (!user) return '/login';
+  if (!user) return { path: '/login', query: { redirect: to.fullPath } };
+  if (user.must_change_password && to.path !== '/password') return { path: '/password', query: { redirect: to.fullPath } };
   if (to.meta.role && to.meta.role !== user.role) return user.role === 'teacher' ? '/teacher/courses' : '/student/courses';
 });
 export default router;

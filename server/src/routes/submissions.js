@@ -4,7 +4,7 @@ import { auth } from '../middleware/auth.js';
 import { studentOnly } from '../middleware/teacher.js';
 import { uploadSingle } from '../middleware/upload.js';
 import { saveSubmission } from '../services/submissionLogic.js';
-import { assignmentAccess,subjectFor,fail } from '../services/access.js';
+import { assignmentAccess,subjectFor,fail,idValue } from '../services/access.js';
 import { submissionAccess,historyRows,receipts,studentView } from '../services/submissionQueries.js';
 import { effectiveDeadline } from '../services/extensions.js';
 import { executeOperation,operationStatus } from '../services/operations.js';
@@ -37,7 +37,7 @@ for(const [prefix,group] of [['submissions',false],['group-submissions',true]]){
  });
  router.get('/'+prefix+'/:id/file',auth,(req,res,next)=>{
  const ctx=submissionAccess(req.params.id,req.user,group);let row=ctx.row;
- if(req.query.history_id){row=db.prepare(`SELECT * FROM ${ctx.history} WHERE id=? AND ${ctx.foreign}=?`).get(req.query.history_id,ctx.row.id);if(!row||!['available','online'].includes(row.file_state))fail(404,'原文件已替换或不可用');}
+ if(req.query.history_id!==undefined){if(Array.isArray(req.query.history_id))fail(400,'历史文件编号只能提供一次');const historyId=idValue(req.query.history_id);row=db.prepare(`SELECT * FROM ${ctx.history} WHERE id=? AND ${ctx.foreign}=?`).get(historyId,ctx.row.id);if(!row||!['available','online'].includes(row.file_state))fail(404,'原文件已替换或不可用');}
  if(row.file_url){const file=resolveUploadPath(row.file_url,{mustExist:true});if(!file)fail(404,'文件不存在');return res.download(file,row.file_name,error=>{if(error&&!res.headersSent)next(error);});}
  if(row.content)return res.attachment('answer.txt').type('text/plain; charset=utf-8').send(row.content);
  fail(404,'文件不存在');

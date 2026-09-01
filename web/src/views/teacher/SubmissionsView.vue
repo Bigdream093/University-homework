@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import api, { messageOf } from '../../api/request.js';
@@ -7,7 +7,7 @@ import { downloadBlob } from '../../utils/files.js';
 import SubmissionRecords from '../../components/SubmissionRecords.vue';
 import ExtensionsPanel from '../../components/ExtensionsPanel.vue';
 import AssignmentGroups from '../../components/AssignmentGroups.vue';
-import { readToken } from '../../utils/session.js';
+import { readToken, readUser } from '../../utils/session.js';
 
 const route = useRoute();
 const router = useRouter();
@@ -19,7 +19,11 @@ const dialog = ref(false);
 const mode = ref('grade');
 const current = ref({});
 const bulkLoading = ref(false);
+const saving = ref(false);
 const form = reactive({ score: null, comment: '', returned_reason: '' });
+let loadSequence = 0;
+let settingEditForm = false;
+let editBaseline = '';
 
 const rows = computed(() => {
   const search = keyword.value.trim().toLowerCase();
@@ -43,30 +47,63 @@ const stats = computed(() => ({
 }));
 
 async function load() {
+  const sequence = ++loadSequence;
+  const assignmentId = route.params.id;
   try {
     const [assignmentResponse, submissionResponse] = await Promise.all([
-      api.get(`/assignments/${route.params.id}`),
-      api.get(`/assignments/${route.params.id}/submissions`)
+      api.get(`/assignments/${assignmentId}`),
+      api.get(`/assignments/${assignmentId}/submissions`)
     ]);
+    if (sequence !== loadSequence) return;
     assignment.value = assignmentResponse.data;
     allRows.value = submissionResponse.data;
   } catch (error) {
-    ElMessage.error(messageOf(error));
+    if (sequence === loadSequence) ElMessage.error(messageOf(error));
   }
 }
+
+const editDraftKey = () => `draft:grading:${readUser()?.id || 'guest'}:${route.params.id}:${current.value.api_base || 'none'}:${mode.value}`;
+const editSnapshot = () => JSON.stringify({ score: form.score, comment: form.comment, returned_reason: form.returned_reason });
 
 function open(row, type) {
   current.value = row;
   mode.value = type;
-  Object.assign(form, {
+  const initial = {
     score: row.score,
     comment: row.comment || '',
     returned_reason: row.returned_reason || ''
-  });
+  };
+  editBaseline = JSON.stringify(initial);
+  let saved;
+  try { saved = JSON.parse(sessionStorage.getItem(editDraftKey()) || 'null'); } catch { saved = null; }
+  settingEditForm = true;
+  Object.assign(form, saved || initial);
+  settingEditForm = false;
   dialog.value = true;
 }
 
+watch([dialog, () => form.score, () => form.comment, () => form.returned_reason], () => {
+  if (!dialog.value || settingEditForm) return;
+  const snapshot = editSnapshot();
+  if (snapshot === editBaseline) sessionStorage.removeItem(editDraftKey());
+  else sessionStorage.setItem(editDraftKey(), snapshot);
+}, { flush: 'sync' });
+
+function discardEdit() {
+  if (current.value.api_base) sessionStorage.removeItem(editDraftKey());
+  dialog.value = false;
+}
+
 async function save() {
+  if (saving.value) return;
+  if (mode.value === 'grade') {
+    const score = Number(form.score);
+    if (form.score === null || form.score === '' || !Number.isFinite(score) || score < 0 || score > Number(assignment.value.total_score)) {
+      ElMessage.warning(`成绩必须在 0 到 ${assignment.value.total_score} 之间`);
+      return;
+    }
+  }
+  saving.value = true;
   try {
     if (mode.value === 'grade') {
       await api.post(current.value.api_base+'/grade', { score: form.score, comment: form.comment });
@@ -74,10 +111,13 @@ async function save() {
       await api.post(current.value.api_base+'/return', { returned_reason: form.returned_reason });
     }
     ElMessage.success(mode.value === 'grade' ? '批改已保存' : '作业已退回');
+    sessionStorage.removeItem(editDraftKey());
     dialog.value = false;
     await load();
   } catch (error) {
     ElMessage.error(messageOf(error));
+  } finally {
+    saving.value = false;
   }
 }
 
@@ -138,15 +178,23 @@ async function downloadInBrowser(entries) {
     '批量下载提示',
     { type: 'info', confirmButtonText: '开始下载', cancelButtonText: '取消' }
   );
+  let saved = 0;
+  const failed = [];
   for (const entry of entries) {
-    if (entry.url) {
-      const response = await api.get(entry.url.replace('/api', ''), { responseType: 'blob',timeout:0 });
-      downloadBlob(response.data, entry.fileName);
-    } else {
-      downloadBlob(new Blob([entry.content], { type: 'text/plain;charset=utf-8' }), entry.fileName);
+    try {
+      if (entry.url) {
+        const response = await api.get(entry.url.replace('/api', ''), { responseType: 'blob',timeout:0 });
+        downloadBlob(response.data, entry.fileName);
+      } else {
+        downloadBlob(new Blob([entry.content], { type: 'text/plain;charset=utf-8' }), entry.fileName);
+      }
+      saved += 1;
+    } catch (error) {
+      failed.push({ fileName: entry.fileName, message: messageOf(error) });
     }
     await new Promise(resolve => window.setTimeout(resolve, 150));
   }
+  return { saved, failed };
 }
 
 async function downloadAll() {
@@ -171,8 +219,9 @@ async function downloadAll() {
         ElMessage.success(`已在桌面生成“${assignment.value.title}”文件夹，共 ${result.saved} 份作业`);
       }
     } else {
-      await downloadInBrowser(entries);
-      ElMessage.success(`已开始下载 ${entries.length} 份作业`);
+      const result = await downloadInBrowser(entries);
+      if (result.failed.length) ElMessage.warning(`已下载 ${result.saved} 份，${result.failed.length} 份失败；其余文件已继续处理`);
+      else ElMessage.success(`已开始下载 ${result.saved} 份作业`);
     }
   } catch (error) {
     if (error !== 'cancel') ElMessage.error(error.message || messageOf(error));
@@ -190,7 +239,21 @@ async function exportExcel() {
   }
 }
 
-onMounted(load);
+function protectUnsavedGrade(event) {
+  if (!dialog.value || editSnapshot() === editBaseline) return;
+  event.preventDefault();
+  event.returnValue = '';
+}
+
+watch(() => route.params.id, () => {
+  dialog.value = false;
+  load();
+});
+onMounted(() => {
+  load();
+  window.addEventListener('beforeunload', protectUnsavedGrade);
+});
+onUnmounted(() => window.removeEventListener('beforeunload', protectUnsavedGrade));
 </script>
 
 <template>
@@ -288,10 +351,10 @@ onMounted(load);
       </el-table>
     </div>
 
-    <AssignmentGroups v-if="assignment.work_mode==='group'" :assignment="assignment" :readonly="assignment.course_status==='archived'"/>
-    <ExtensionsPanel :assignment-id="route.params.id" :readonly="assignment.course_status==='archived'||assignment.status!=='published'" @changed="load"/>
-    <el-dialog v-model="dialog" :title="mode === 'grade' ? `批改 · ${current.name}` : `退回 · ${current.name}`" width="min(520px, 92vw)">
-      <el-form label-position="top">
+    <AssignmentGroups v-if="assignment.work_mode==='group'" :key="`groups-${route.params.id}`" :assignment="assignment" :readonly="assignment.course_status==='archived'"/>
+    <ExtensionsPanel :key="`extensions-${route.params.id}`" :assignment-id="route.params.id" :readonly="assignment.course_status==='archived'||assignment.status!=='published'" @changed="load"/>
+    <el-dialog v-model="dialog" :title="mode === 'grade' ? `批改 · ${current.name}` : `退回 · ${current.name}`" width="min(520px, 92vw)" :close-on-click-modal="!saving" @closed="discardEdit">
+      <el-form label-position="top" :disabled="saving">
         <template v-if="mode === 'grade'">
           <el-form-item :label="`成绩（满分 ${assignment.total_score}）`">
             <el-input-number v-model="form.score" :min="0" :max="assignment.total_score" />
@@ -305,8 +368,8 @@ onMounted(load);
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialog = false">取消</el-button>
-        <el-button :type="mode === 'grade' ? 'primary' : 'warning'" :color="mode === 'grade' ? '#15554e' : ''" @click="save">确认</el-button>
+        <el-button :disabled="saving" @click="discardEdit">取消</el-button>
+        <el-button :type="mode === 'grade' ? 'primary' : 'warning'" :color="mode === 'grade' ? '#15554e' : ''" :loading="saving" @click="save">确认</el-button>
       </template>
     </el-dialog>
   </div>

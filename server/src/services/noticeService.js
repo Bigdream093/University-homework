@@ -18,7 +18,7 @@ export function publishDueNotices(at=nowText()) {
 }
 export function listNotices(courseId,user,res) {
   courseAccess(courseId,user);publishDueNotices();
-  if(user.role==='teacher')return res.json(db.prepare('SELECT n.*,(SELECT count(*) FROM notice_reads r WHERE r.notice_id=n.id) read_count FROM notices n WHERE course_id=? ORDER BY pinned DESC,created_at DESC,id DESC').all(courseId));
+  if(user.role==='teacher')return res.json(db.prepare('SELECT n.*,(SELECT count(*) FROM notice_reads r WHERE r.notice_id=n.id AND EXISTS(SELECT 1 FROM course_students cs WHERE cs.course_id=n.course_id AND cs.student_id=r.student_id)) read_count FROM notices n WHERE course_id=? ORDER BY pinned DESC,created_at DESC,id DESC').all(courseId));
   const rows=db.prepare("SELECT n.*,r.first_read_at,r.last_seen_revision FROM notices n LEFT JOIN notice_reads r ON r.notice_id=n.id AND r.student_id=? WHERE n.course_id=? AND n.status IN ('published','withdrawn') ORDER BY pinned DESC,published_at DESC,n.id DESC").all(user.id,courseId);
   res.json(rows.map(n=>({id:n.id,title:n.status==='withdrawn'?'已撤回的通知':n.title,status:n.status,pinned:n.pinned,created_at:n.created_at,published_at:n.published_at,scheduled_at:n.scheduled_at,updated_at:n.updated_at,withdrawn_at:n.withdrawn_at,content_revision:n.content_revision,content_preview:n.status==='withdrawn'?'该通知已被教师撤回':Array.from(n.content.replace(/\s+/g,' ')).slice(0,160).join(''),is_read:!!n.first_read_at,is_updated:n.status==='published'&&!!n.first_read_at&&n.last_seen_revision<n.content_revision})));
 }
@@ -41,7 +41,7 @@ export function markRead(id,user,res,body={}) {
 }
 export function readers(id,teacherId,res) {
   noticeAccess(id,{id:teacherId,role:'teacher'});
-  res.json(db.prepare('SELECT u.username,u.name,r.first_read_at,r.last_read_at,r.last_seen_revision FROM notice_reads r JOIN users u ON u.id=r.student_id WHERE r.notice_id=? ORDER BY r.first_read_at,u.username').all(id));
+  res.json(db.prepare('SELECT u.username,u.name,r.first_read_at,r.last_read_at,r.last_seen_revision FROM notice_reads r JOIN notices n ON n.id=r.notice_id JOIN course_students cs ON cs.course_id=n.course_id AND cs.student_id=r.student_id JOIN users u ON u.id=r.student_id WHERE r.notice_id=? ORDER BY r.first_read_at,u.username').all(id));
 }
 function statusInput(body) { const s=body.status||'draft';if(!['draft','scheduled','published'].includes(s))fail(400,'发布状态无效');return s; }
 export function createNotice(courseId,teacherId,body,res) {

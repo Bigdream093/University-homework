@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import api, { messageOf } from '../../api/request.js';
@@ -7,6 +7,7 @@ import SubmissionRecords from '../../components/SubmissionRecords.vue';
 import ExtensionsPanel from '../../components/ExtensionsPanel.vue';
 import { useUpload } from '../../composables/useUpload.js';
 import { createServerClock, deadlineState } from '../../utils/deadline.js';
+import { readUser } from '../../utils/session.js';
 
 const route = useRoute();
 const router = useRouter();
@@ -18,12 +19,19 @@ const canSubmit=computed(()=>context.value.can_submit && (assignment.value.allow
 const submission = ref(null);
 const content = ref('');
 const file = ref(null);
+const fileInput = ref(null);
 const loading = ref(false);
 const history = ref([]);
 const historyDialog = ref(false);
 const currentTime = ref(Date.now());
 let serverClock = () => Date.now();
 let clockTimer;
+let loadSequence = 0;
+let contentBaseline = '';
+let settingContent = false;
+
+const submissionDraftKey = id => `draft:submission:${readUser()?.id || 'guest'}:${id}`;
+const fileDraftKey = id => `draft:submission-file:${readUser()?.id || 'guest'}:${id}`;
 
 const deadline = computed(() => deadlineState(context.value.effective_deadline, currentTime.value));
 const fileSizeLabel = computed(() => {
@@ -32,31 +40,59 @@ const fileSizeLabel = computed(() => {
 });
 
 async function load() {
+  const sequence = ++loadSequence;
+  const assignmentId = route.params.id;
   try {
     const [assignmentResponse, submissionResponse, contextResponse] = await Promise.all([
-      api.get(`/assignments/${route.params.id}`),
-      api.get(`/assignments/${route.params.id}/my-submission`),
-      api.get(`/assignments/${route.params.id}/submission-context`)
+      api.get(`/assignments/${assignmentId}`),
+      api.get(`/assignments/${assignmentId}/my-submission`),
+      api.get(`/assignments/${assignmentId}/submission-context`)
     ]);
+    if (sequence !== loadSequence) return;
     assignment.value = assignmentResponse.data;
     context.value=contextResponse.data;
     submission.value = submissionResponse.data;
-    content.value = submission.value?.content || '';
+    contentBaseline = submission.value?.content || '';
+    settingContent = true;
+    content.value = sessionStorage.getItem(submissionDraftKey(assignmentId)) ?? contentBaseline;
+    settingContent = false;
     serverClock = createServerClock(assignment.value.server_now);
     currentTime.value = serverClock();
+    const previousFile = sessionStorage.getItem(fileDraftKey(assignmentId));
+    if (previousFile && !file.value) {
+      sessionStorage.removeItem(fileDraftKey(assignmentId));
+      ElMessage.warning(`上次未提交的文件“${previousFile}”需要重新选择，在线文字已为你保留。`);
+    }
   } catch (error) {
-    ElMessage.error(messageOf(error));
+    if (sequence === loadSequence) ElMessage.error(messageOf(error));
   }
+}
+
+watch(content, value => {
+  if (settingContent) return;
+  const key = submissionDraftKey(route.params.id);
+  if (value !== contentBaseline) sessionStorage.setItem(key, value);
+  else sessionStorage.removeItem(key);
+}, { flush: 'sync' });
+
+function resetFileSelection(clearDraft = false) {
+  file.value = null;
+  if (fileInput.value) fileInput.value.value = '';
+  if (clearDraft) sessionStorage.removeItem(fileDraftKey(route.params.id));
 }
 
 function onFileChange(event) {
   const selected = event.target.files[0] || null;
   if (selected && assignment.value.max_file_mb && selected.size > assignment.value.max_file_mb * 1024 * 1024) {
     ElMessage.warning(`该作业限制单文件不超过 ${fileSizeLabel.value}`);
+    file.value = null;
     event.target.value = '';
+    sessionStorage.removeItem(fileDraftKey(route.params.id));
     return;
   }
   file.value = selected;
+  if (selected) sessionStorage.setItem(fileDraftKey(route.params.id), selected.name);
+  else sessionStorage.removeItem(fileDraftKey(route.params.id));
 }
 
 async function confirmSubmission() {
@@ -116,7 +152,8 @@ async function submit() {
       '提交成功',
       { type: 'success', confirmButtonText: '好的' }
     );
-    file.value = null;
+    sessionStorage.removeItem(submissionDraftKey(route.params.id));
+    resetFileSelection(true);
     await load();
   } catch (error) {
     ElMessage.error(messageOf(error));
@@ -135,14 +172,29 @@ async function showHistory() {
   }
 }
 
+function protectUnsavedWork(event) {
+  if (!file.value && content.value === contentBaseline) return;
+  event.preventDefault();
+  event.returnValue = '';
+}
+
+watch(() => route.params.id, () => {
+  resetFileSelection(false);
+  load();
+});
+
 onMounted(() => {
   load();
+  window.addEventListener('beforeunload', protectUnsavedWork);
   clockTimer = window.setInterval(() => {
     currentTime.value = serverClock();
   }, 60_000);
 });
 
-onUnmounted(() => window.clearInterval(clockTimer));
+onUnmounted(() => {
+  window.clearInterval(clockTimer);
+  window.removeEventListener('beforeunload', protectUnsavedWork);
+});
 </script>
 
 <template>
@@ -235,7 +287,7 @@ onUnmounted(() => window.clearInterval(clockTimer));
           placeholder="在此输入作答内容"
         />
         <template v-else>
-          <input id="file" type="file" hidden :disabled="loading||!canSubmit" @change="onFileChange">
+          <input id="file" ref="fileInput" type="file" hidden :disabled="loading||!canSubmit" @change="onFileChange">
           <label
             for="file"
             style="display: block; border: 1px dashed #9bb8b2; border-radius: 14px; padding: 30px 15px; text-align: center; cursor: pointer; background: #f7fbf9"
@@ -262,7 +314,7 @@ onUnmounted(() => window.clearInterval(clockTimer));
       </aside>
     </div>
 
-    <ExtensionsPanel :assignment-id="route.params.id" :can-apply="context.can_submit && !!assignment.deadline" :readonly="assignment.course_status==='archived'||assignment.status!=='published'" @changed="load"/>
+    <ExtensionsPanel :key="route.params.id" :assignment-id="route.params.id" :can-apply="context.can_submit && !!assignment.deadline" :readonly="assignment.course_status==='archived'||assignment.status!=='published'" @changed="load"/>
     <router-link to="/help#student-submit">提交、重试与回执说明</router-link>
     <el-dialog v-model="historyDialog" title="提交历史" width="min(620px,94vw)">
       <el-timeline>

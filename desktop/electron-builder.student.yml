@@ -12,7 +12,7 @@ files:
   - package.json
 asar: true
 win:
-  icon: build/student.ico
+  icon: build/student.png
   target:
     - target: nsis
       arch:
@@ -25,10 +25,10 @@ mac:
   target:
     - target: dmg
       arch:
-        - universal
+        - arm64
     - target: zip
       arch:
-        - universal
+        - arm64
   artifactName: 墨痕学生端-macOS-${arch}-${version}.${ext}
 nsis:
   oneClick: false

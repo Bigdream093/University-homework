@@ -8,7 +8,7 @@
   "scripts": {
     "build:teacher": "electron-builder --config electron-builder.teacher.yml",
     "build:student": "electron-builder --config electron-builder.student.yml",
-    "build:student:mac": "electron-builder --config electron-builder.student.yml --mac --universal",
+    "build:student:mac": "electron-builder --config electron-builder.student.yml --mac --arm64",
     "build": "npm run build:teacher && npm run build:student"
   },
   "devDependencies": {

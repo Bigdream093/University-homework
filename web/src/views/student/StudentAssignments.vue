@@ -23,25 +23,29 @@ const tabDefs = ref([
 ]);
 useDraggableTabs(tabsRoot, tabDefs, 'student-course');
 const unread=ref(0);
-async function refreshUnread(){try{const {data}=await api.get('/my/courses');unread.value=data.find(c=>c.id===Number(route.params.id))?.unread_notice_count||0;}catch{}}
+let loadSequence=0,unreadSequence=0;
+async function refreshUnread(){const sequence=++unreadSequence,courseId=Number(route.params.id);try{const {data}=await api.get('/my/courses');if(sequence===unreadSequence)unread.value=data.find(c=>c.id===courseId)?.unread_notice_count||0;}catch{}}
 useRefresh(()=>{load();refreshUnread();});
 watch(tab,refreshUnread);
+watch(() => route.params.id, () => { load();refreshUnread(); });
 const currentTime = ref(Date.now());
 let serverClock = () => Date.now();
 let clockTimer;
 
 async function load() {
+  const sequence=++loadSequence,courseId=route.params.id;
   try {
     const [courseResponse, assignmentResponse] = await Promise.all([
-      api.get(`/courses/${route.params.id}`),
-      api.get(`/courses/${route.params.id}/assignments`)
+      api.get(`/courses/${courseId}`),
+      api.get(`/courses/${courseId}/assignments`)
     ]);
+    if(sequence!==loadSequence)return;
     course.value = courseResponse.data;
     items.value = assignmentResponse.data;
     serverClock = createServerClock(items.value[0]?.server_now);
     currentTime.value = serverClock();
   } catch (error) {
-    ElMessage.error(messageOf(error));
+    if(sequence===loadSequence)ElMessage.error(messageOf(error));
   }
 }
 
@@ -58,7 +62,6 @@ function deadline(assignment) {
 }
 
 onMounted(() => {
-  load();
   clockTimer = window.setInterval(() => {
     currentTime.value = serverClock();
   }, 60_000);
@@ -80,7 +83,7 @@ onUnmounted(() => window.clearInterval(clockTimer));
     <div ref="tabsRoot">
       <el-tabs v-model="tab" class="section-tabs">
         <el-tab-pane v-for="def in tabDefs" :key="def.name" :label="def.name==='notices'&&unread?def.label+'（'+unread+'）':def.label" :name="def.name" lazy>
-          <div v-if="def.name === 'notices'" class="panel"><StudentNotices v-if="tab==='notices'" :course-id="route.params.id" @read="refreshUnread"/></div>
+          <div v-if="def.name === 'notices'" class="panel"><StudentNotices v-if="tab==='notices'" :key="`notices-${route.params.id}`" :course-id="route.params.id" @read="refreshUnread"/></div>
           <div v-else-if="def.name === 'assignments'" class="panel">
             <article
               v-for="assignment in items"
@@ -110,8 +113,8 @@ onUnmounted(() => window.clearInterval(clockTimer));
             </article>
             <div v-if="!items.length" class="empty">老师还没有发布作业。</div>
           </div>
-          <div v-else-if="def.name === 'questions'" class="panel"><CourseQuestions v-if="tab==='questions'" :course-id="route.params.id" :readonly="course.status==='archived'"/></div>
-          <div v-else-if="def.name === 'materials'" class="panel"><StudentMaterials :course-id="route.params.id" /></div>
+          <div v-else-if="def.name === 'questions'" class="panel"><CourseQuestions v-if="tab==='questions'" :key="`questions-${route.params.id}`" :course-id="route.params.id" :readonly="course.status==='archived'"/></div>
+          <div v-else-if="def.name === 'materials'" class="panel"><StudentMaterials :key="`materials-${route.params.id}`" :course-id="route.params.id" /></div>
         </el-tab-pane>
       </el-tabs>
     </div>

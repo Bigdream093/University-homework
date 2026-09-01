@@ -42,3 +42,15 @@ export function quarantineOrphans(minAgeMs=24*60*60*1000) {
   for(const source of candidates){const target=path.join(dest,randomUUID()+path.extname(source));fs.renameSync(source,target);db.prepare('INSERT INTO storage_quarantine(original_path,quarantine_path,quarantined_at) VALUES(?,?,?)').run(source,target,nowText());}
   return {quarantined:candidates.length,retention_days:30};
 }
+export function purgeExpiredQuarantine(retentionDays=30) {
+  const rows=db.prepare("SELECT * FROM storage_quarantine WHERE deleted_at IS NULL AND quarantined_at<=datetime('now','+08:00',?)").all(`-${retentionDays} days`);
+  let removed=0;
+  for(const row of rows){
+    const resolved=resolveUploadPath(row.quarantine_path);
+    try{
+      if(resolved)fs.rmSync(resolved,{force:true});
+      db.prepare('UPDATE storage_quarantine SET deleted_at=? WHERE id=?').run(nowText(),row.id);removed+=1;
+    }catch(error){console.warn('隔离文件到期清理等待重试',error.code);}
+  }
+  return {removed,retention_days:retentionDays};
+}

@@ -4,15 +4,23 @@ import jwt from 'jsonwebtoken';
 import { db } from '../db.js';
 import { config } from '../config.js';
 import { auth } from '../middleware/auth.js';
+import { clientAddress,createFailureLimiter,rejectLimited } from '../services/attemptLimiter.js';
 
 const router = Router();
+const identityAttempts=createFailureLimiter({maxFailures:5,baseDelayMs:1000,lockMs:15*60*1000});
+const addressAttempts=createFailureLimiter({maxFailures:20,baseDelayMs:0,lockMs:15*60*1000});
 
 router.post('/login', (req, res) => {
   const username = String(req.body.username || '').trim();
+  const address=clientAddress(req),identityKey=`${address}:${username.toLowerCase()}`;
+  const identityGate=identityAttempts.check(identityKey),addressGate=addressAttempts.check(address);
+  if(!identityGate.allowed||!addressGate.allowed)return rejectLimited(res,Math.max(identityGate.retryAfter,addressGate.retryAfter));
   const user = db.prepare('SELECT * FROM users WHERE username=?').get(username);
   if (!user || user.status !== 'active' || !bcrypt.compareSync(String(req.body.password || ''), user.password_hash)) {
+    identityAttempts.fail(identityKey);addressAttempts.fail(address);
     return res.status(401).json({ message: '账号或密码错误' });
   }
+  identityAttempts.success(identityKey);
   const profile = { id: user.id, username: user.username, name: user.name, role: user.role, must_change_password: user.must_change_password };
   res.json({ token: jwt.sign({ id: user.id, role: user.role }, config.jwtSecret, { expiresIn: '24h' }), user: profile });
 });

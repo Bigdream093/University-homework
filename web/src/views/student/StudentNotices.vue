@@ -6,8 +6,9 @@ import api, { messageOf } from '../../api/request.js';
 const props = defineProps({ courseId: { type: [String, Number], required: true } });
 const emit=defineEmits(['read']);
 const notices = ref([]), detail = ref(null), dialog = ref(false);
-async function load() { try { notices.value = (await api.get(`/courses/${props.courseId}/notices`)).data; } catch (error) { ElMessage.error(messageOf(error)); } }
-async function open(item) { try { detail.value = (await api.get(`/notices/${item.id}`)).data; dialog.value = true; await nextTick(); if (detail.value.status === 'published') { await api.post(`/notices/${item.id}/read`,{revision:detail.value.content_revision}); await load();emit('read'); } } catch (error) { ElMessage.error(messageOf(error)); } }
+let openSequence = 0,loadSequence=0;
+async function load() { const sequence=++loadSequence,courseId=props.courseId;try { const data=(await api.get(`/courses/${courseId}/notices`)).data;if(sequence===loadSequence)notices.value=data; } catch (error) { if(sequence===loadSequence)ElMessage.error(messageOf(error)); } }
+async function open(item) { const sequence=++openSequence;try { const d=(await api.get(`/notices/${item.id}`)).data;if(sequence!==openSequence)return;detail.value=d;dialog.value=true;await nextTick();if(sequence!==openSequence)return;if(d.status==='published'){await api.post(`/notices/${item.id}/read`,{revision:d.content_revision});if(sequence!==openSequence)return;await load();emit('read');} } catch (error) { if(sequence===openSequence)ElMessage.error(messageOf(error)); } }
 useRefresh(load);
 </script>
 <template>

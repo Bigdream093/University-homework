@@ -22,12 +22,12 @@ router.get('/courses/:id/questions',auth,(req,res)=>{
 });
 router.get('/courses/:id/questions/public',auth,(req,res)=>{
  courseAccess(req.params.id,req.user);const {limit,offset}=pageOf(req.query),keyword='%'+String(req.query.keyword||'')+'%';
- // Public reads never select the original question text or private replies.
- res.json(db.prepare("SELECT p.id,p.summary,p.reply,p.created_at,q.pinned,u.name student_name FROM question_publications p JOIN course_questions q ON q.id=p.question_id JOIN users u ON u.id=q.student_id WHERE q.course_id=? AND q.must_private=0 AND q.hidden=0 AND p.status='published' AND (p.summary LIKE ? OR p.reply LIKE ?) ORDER BY q.pinned DESC,p.id DESC LIMIT ? OFFSET ?").all(req.params.id,keyword,keyword,limit,offset));
+ // Public reads never select the student identity, original question text or private replies.
+ res.json(db.prepare("SELECT p.id,p.summary,p.reply,p.created_at,q.pinned FROM question_publications p JOIN course_questions q ON q.id=p.question_id WHERE q.course_id=? AND q.hidden=0 AND p.status='published' AND (p.summary LIKE ? OR p.reply LIKE ?) ORDER BY q.pinned DESC,p.id DESC LIMIT ? OFFSET ?").all(req.params.id,keyword,keyword,limit,offset));
 });
 router.post('/courses/:id/questions',auth,studentOnly,(req,res)=>{
  const c=courseAccess(req.params.id,req.user,{write:true}),at=nowText();
- const id=db.prepare('INSERT INTO course_questions(course_id,student_id,title,content,must_private,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').run(c.id,req.user.id,textValue(req.body.title,'标题',200),textValue(req.body.content,'问题内容'),req.body.must_private===false?0:1,at,at).lastInsertRowid;
+ const id=db.prepare('INSERT INTO course_questions(course_id,student_id,title,content,must_private,created_at,updated_at) VALUES(?,?,?,?,0,?,?)').run(c.id,req.user.id,textValue(req.body.title,'标题',200),textValue(req.body.content,'问题内容'),at,at).lastInsertRowid;
  res.status(201).json({id});
 });
 router.get('/questions/:id',auth,(req,res)=>{
@@ -46,15 +46,8 @@ router.post('/questions/:id/replies',auth,(req,res)=>{
  db.transaction(()=>{db.prepare('INSERT INTO question_replies(question_id,author_id,content,created_at) VALUES(?,?,?,?)').run(q.id,req.user.id,textValue(req.body.content,'回复内容'),at);db.prepare('UPDATE course_questions SET status=?,updated_at=? WHERE id=?').run(req.user.role==='teacher'?'answered':'open',at,q.id);})();
  res.status(201).json({message:'私人回复已保存'});
 });
-router.put('/questions/:id/privacy',auth,studentOnly,(req,res)=>{
- db.transaction(()=>{const q=privateQuestion(req.params.id,req.user),value=req.body.must_private!==false?1:0;
- if(!value)courseAccess(q.course_id,req.user,{write:true});
- if(value)withdraw(q,req.user);
- db.prepare('UPDATE course_questions SET must_private=?,updated_at=? WHERE id=?').run(value,nowText(),q.id);event(q,req.user,value?'require_private':'allow_public');})();
- res.json({message:'隐私设置已保存；先前已经被阅读的内容无法收回'});
-});
 router.post('/questions/:id/publish',auth,teacherOnly,(req,res)=>{
- db.transaction(()=>{const q=privateQuestion(req.params.id,req.user,true);if(q.must_private||q.hidden)fail(400,'学生要求必须私人或问题已隐藏，不能公开');
+ db.transaction(()=>{const q=privateQuestion(req.params.id,req.user,true);if(q.hidden)fail(400,'问题已隐藏，不能公开');
  const summary=textValue(req.body.summary,'公开摘要'),reply=textValue(req.body.reply,'公开答复');withdraw(q,req.user);
  db.prepare('INSERT INTO question_publications(question_id,teacher_id,summary,reply,created_at) VALUES(?,?,?,?,?)').run(q.id,req.user.id,summary,reply,nowText());event(q,req.user,'publish');})();
  res.status(201).json({message:'已公开摘要和答复，私人原帖及后续追问不会公开'});

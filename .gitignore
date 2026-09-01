@@ -7,6 +7,8 @@ server/uploads/
 release/
 .mimosa/
 desktop/build/
+!desktop/build/
+!desktop/build/*.png
 desktop/build-mac-staging/
 desktop/release-final/
 desktop/release-previous-*/

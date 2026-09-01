@@ -10,7 +10,7 @@ const index=[
  {"id":"student-receipt","title":"学生：提交历史与提交回执","role":"student"},
  {"id":"student-group","title":"学生：分组作业","role":"student"},
  {"id":"student-extension","title":"学生：申请延期","role":"student"},
- {"id":"student-qa","title":"学生：私人问答与公开问答","role":"student"},
+ {"id":"student-qa","title":"学生：课程提问与公开问答","role":"student"},
  {"id":"student-faq","title":"学生：常见问题","role":"student"},
  {"id":"teacher-course","title":"教师：创建课程与学生管理","role":"teacher"},
  {"id":"teacher-assignment","title":"教师：发布个人作业","role":"teacher"},

@@ -42,3 +42,10 @@ test('production refuses a missing timezone before creating or migrating the dat
  const env={...process.env,NODE_ENV:'production',TZ:'UTC',DATA_DIR:target};
  try{assert.throws(()=>execFileSync(process.execPath,['--input-type=module','-e',"await import('./src/db.js')"],{cwd:path.resolve(import.meta.dirname,'..'),env,stdio:'pipe'}));assert.equal(fs.existsSync(target),false);}finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
+
+test('production refuses missing, short and example JWT secrets',()=>{
+ const cwd=path.resolve(import.meta.dirname,'..'),code="await import('./src/config.js')";
+ const run=extra=>execFileSync(process.execPath,['--input-type=module','-e',code],{cwd,env:{...process.env,NODE_ENV:'production',TZ:'Asia/Shanghai',...extra},stdio:'pipe'});
+ for(const JWT_SECRET of ['', 'too-short', 'replace-with-a-long-random-string'])assert.throws(()=>run({JWT_SECRET}));
+ assert.doesNotThrow(()=>run({JWT_SECRET:'a-secure-production-secret-with-32-bytes'}));
+});

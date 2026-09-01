@@ -20,4 +20,5 @@ export function saveSession(token, user) {
 export function clearSession() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('hw-session-cleared'));
 }

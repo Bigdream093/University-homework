@@ -13,4 +13,5 @@ services:
       JWT_SECRET: ${JWT_SECRET:?请在.env中设置JWT_SECRET}
       PORT: 3000
       UPLOAD_MAX_MB: 200
+      MATERIAL_UPLOAD_MAX_MB: 10240
       TZ: Asia/Shanghai
