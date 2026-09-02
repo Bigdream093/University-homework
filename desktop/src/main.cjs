@@ -1,6 +1,8 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
+const { Readable, Transform } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
 const metadata = require('../package.json');
 
 const clientRole = metadata.clientRole === 'student' ? 'student' : 'teacher';
@@ -11,6 +13,7 @@ const appId = clientRole === 'teacher' ? 'com.kexu.homework.teacher' : 'com.kexu
 let mainWindow;
 let setupWindow;
 let handlingLoadFailure = false;
+const materialDownloads = new Map();
 
 function settingsPath() {
   return path.join(app.getPath('userData'), 'settings.json');
@@ -90,6 +93,220 @@ async function saveAssignmentFiles(payload) {
 
   if (saved > 0) await shell.openPath(folderPath);
   return { folderPath, saved, failed };
+}
+
+function sendMaterialProgress(webContents, payload) {
+  if (!webContents.isDestroyed()) webContents.send('material-download:progress', payload);
+}
+
+function materialDownloadView(record, message = record.message) {
+  return {
+    requestId: record.requestId,
+    materialId: record.materialId,
+    fileName: record.fileName,
+    loaded: record.loaded,
+    total: record.total,
+    state: record.state,
+    message: message || ''
+  };
+}
+
+function publishMaterialDownload(record, message) {
+  record.message = message || '';
+  sendMaterialProgress(record.webContents, materialDownloadView(record));
+}
+
+function ownedMaterialDownload(event, requestId) {
+  const record = materialDownloads.get(String(requestId || ''));
+  if (!record || record.webContentsId !== event.sender.id) throw new Error('下载任务不存在');
+  return record;
+}
+
+function readableBytes(bytes) {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)}GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)}MB`;
+  return `${Math.ceil(bytes / 1024)}KB`;
+}
+
+function ensureDownloadSpace(record) {
+  if (typeof fs.statfsSync !== 'function' || !record.total) return;
+  const remaining = Math.max(0, record.total - record.loaded);
+  try {
+    const stats = fs.statfsSync(path.dirname(record.targetPath), { bigint: true });
+    const available = Number(stats.bavail * stats.bsize);
+    if (remaining > available) {
+      throw new Error(`磁盘空间不足：还需 ${readableBytes(remaining)}，当前可用 ${readableBytes(available)}`);
+    }
+  } catch (error) {
+    if (error.message.startsWith('磁盘空间不足')) throw error;
+    // Some network filesystems do not expose free-space statistics.
+  }
+}
+
+async function transferMaterialFile(record) {
+  record.pauseRequested = false;
+  record.cancelRequested = false;
+  record.controller = new AbortController();
+  record.loaded = fs.existsSync(record.temporaryPath) ? fs.statSync(record.temporaryPath).size : 0;
+  record.state = 'downloading';
+  publishMaterialDownload(record);
+
+  try {
+    ensureDownloadSpace(record);
+    const downloadUrl = new URL(`/api/materials/${record.materialId}/file`, record.serverUrl);
+    const headers = { Authorization: `Bearer ${record.token}` };
+    if (record.loaded > 0) {
+      headers.Range = `bytes=${record.loaded}-`;
+      if (record.validator) headers['If-Range'] = record.validator;
+    }
+    const response = await fetch(downloadUrl, { headers, signal: record.controller.signal });
+    if (new URL(response.url).origin !== new URL(record.serverUrl).origin) throw new Error('下载地址不属于当前服务器');
+    if (!response.ok || !response.body) {
+      let message = `服务器返回 ${response.status}`;
+      try { message = JSON.parse(await response.text()).message || message; } catch {}
+      throw new Error(message);
+    }
+
+    if (record.loaded > 0 && response.status === 206) {
+      const range = /^bytes (\d+)-(\d+)\/(\d+|\*)$/.exec(response.headers.get('content-range') || '');
+      if (!range || Number(range[1]) !== record.loaded) throw new Error('服务器返回的断点位置不一致，请重试');
+      if (range[3] !== '*') record.total = Number(range[3]);
+    } else {
+      if (record.loaded > 0 || fs.existsSync(record.temporaryPath)) {
+        fs.rmSync(record.temporaryPath, { force: true });
+        record.loaded = 0;
+      }
+      record.total = Number(response.headers.get('content-length')) || record.total;
+    }
+    record.validator = response.headers.get('etag') || response.headers.get('last-modified') || record.validator;
+    ensureDownloadSpace(record);
+
+    let lastProgressAt = 0;
+    const progress = new Transform({
+      transform(chunk, _encoding, done) {
+        record.loaded += chunk.length;
+        const now = Date.now();
+        if (now - lastProgressAt >= 200 || (record.total && record.loaded >= record.total)) {
+          lastProgressAt = now;
+          publishMaterialDownload(record);
+        }
+        done(null, chunk);
+      }
+    });
+    await pipeline(
+      Readable.fromWeb(response.body),
+      progress,
+      fs.createWriteStream(record.temporaryPath, { flags: fs.existsSync(record.temporaryPath) ? 'a' : 'wx' })
+    );
+    if (record.total && record.loaded !== record.total) throw new Error('下载未完成，请重试');
+
+    if (fs.existsSync(record.targetPath)) fs.rmSync(record.targetPath, { force: true });
+    fs.renameSync(record.temporaryPath, record.targetPath);
+    record.state = 'completed';
+    publishMaterialDownload(record);
+    return materialDownloadView(record);
+  } catch (error) {
+    record.loaded = fs.existsSync(record.temporaryPath) ? fs.statSync(record.temporaryPath).size : 0;
+    if (record.cancelRequested) {
+      fs.rmSync(record.temporaryPath, { force: true });
+      record.state = 'cancelled';
+      publishMaterialDownload(record, '下载已取消');
+      materialDownloads.delete(record.requestId);
+      return materialDownloadView(record, '下载已取消');
+    }
+    if (record.pauseRequested) {
+      record.state = 'paused';
+      publishMaterialDownload(record, '下载已暂停');
+      return materialDownloadView(record, '下载已暂停');
+    }
+    record.state = 'failed';
+    publishMaterialDownload(record, error.message || '下载失败');
+    return materialDownloadView(record, error.message || '下载失败');
+  } finally {
+    record.controller = null;
+  }
+}
+
+async function saveMaterialFile(event, payload) {
+  const serverUrl = readSettings().serverUrl;
+  if (!serverUrl) throw new Error('尚未设置服务器地址');
+
+  const materialId = Number(payload?.materialId);
+  const requestId = String(payload?.requestId || '');
+  const token = String(payload?.token || '');
+  if (!Number.isSafeInteger(materialId) || materialId <= 0) throw new Error('资料编号无效');
+  if (!/^[a-zA-Z0-9-]{16,80}$/.test(requestId)) throw new Error('下载请求编号无效');
+  if (!token) throw new Error('登录状态已失效，请重新登录');
+  if (materialDownloads.has(requestId)) throw new Error('该资料正在下载');
+
+  const fileName = safePathSegment(payload?.fileName, '学习资料');
+  const downloadFolder = app.getPath('downloads');
+  fs.mkdirSync(downloadFolder, { recursive: true });
+  const targetPath = uniquePath(downloadFolder, fileName);
+  const temporaryPath = path.join(path.dirname(targetPath), `.${path.basename(targetPath)}.${requestId}.part`);
+  const webContents = event.sender;
+  fs.rmSync(temporaryPath, { force: true });
+  const record = {
+    requestId, materialId, token, fileName, targetPath, temporaryPath, serverUrl,
+    webContents, webContentsId: webContents.id, loaded: 0, total: Number(payload?.fileSize) || 0,
+    state: 'starting', message: '', validator: '', controller: null,
+    pauseRequested: false, cancelRequested: false
+  };
+  materialDownloads.set(requestId, record);
+  return transferMaterialFile(record);
+}
+
+function pauseMaterialDownload(event, requestId) {
+  const record = ownedMaterialDownload(event, requestId);
+  if (record.state === 'downloading' && record.controller) {
+    record.pauseRequested = true;
+    record.state = 'pausing';
+    publishMaterialDownload(record, '正在暂停');
+    record.controller.abort();
+  }
+  return materialDownloadView(record);
+}
+
+async function resumeMaterialDownload(event, payload) {
+  const record = ownedMaterialDownload(event, payload?.requestId);
+  if (!['paused', 'failed'].includes(record.state)) return materialDownloadView(record);
+  const token = String(payload?.token || '');
+  if (!token) throw new Error('登录状态已失效，请重新登录');
+  record.token = token;
+  return transferMaterialFile(record);
+}
+
+function cancelMaterialDownload(event, requestId) {
+  const record = ownedMaterialDownload(event, requestId);
+  record.cancelRequested = true;
+  if (record.controller) {
+    record.state = 'cancelling';
+    publishMaterialDownload(record, '正在取消');
+    record.controller.abort();
+  } else {
+    fs.rmSync(record.temporaryPath, { force: true });
+    materialDownloads.delete(record.requestId);
+  }
+  return { cancelled: true };
+}
+
+function openMaterialDownloadFolder(event, requestId) {
+  const record = ownedMaterialDownload(event, requestId);
+  if (record.state !== 'completed' || !fs.existsSync(record.targetPath)) throw new Error('下载文件不存在');
+  shell.showItemInFolder(record.targetPath);
+  return { opened: true };
+}
+
+function dismissMaterialDownload(event, requestId) {
+  const record = ownedMaterialDownload(event, requestId);
+  if (record.state === 'completed') materialDownloads.delete(record.requestId);
+  return { dismissed: record.state === 'completed' };
+}
+
+function listMaterialDownloads(event) {
+  return [...materialDownloads.values()]
+    .filter(record => record.webContentsId === event.sender.id)
+    .map(record => materialDownloadView(record));
 }
 
 function normalizeServerUrl(input) {
@@ -279,6 +496,13 @@ app.whenReady().then(() => {
     return result;
   });
   ipcMain.handle('assignment-files:save', (_event, payload) => saveAssignmentFiles(payload));
+  ipcMain.handle('material-file:save', (event, payload) => saveMaterialFile(event, payload));
+  ipcMain.handle('material-download:pause', pauseMaterialDownload);
+  ipcMain.handle('material-download:resume', resumeMaterialDownload);
+  ipcMain.handle('material-download:cancel', cancelMaterialDownload);
+  ipcMain.handle('material-download:open-folder', openMaterialDownloadFolder);
+  ipcMain.handle('material-download:dismiss', dismissMaterialDownload);
+  ipcMain.handle('material-download:list', listMaterialDownloads);
 
   const serverUrl = readSettings().serverUrl;
   if (serverUrl) createMainWindow(serverUrl);

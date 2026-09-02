@@ -1,0 +1,49 @@
+name: Build student macOS arm64
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/mac-arm64-1.1.1
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: desktop
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Apple Silicon DMG
+        run: npx electron-builder --config electron-builder.student.yml --mac dmg --arm64
+
+      - name: Create checksum
+        run: shasum -a 256 release/student/*.dmg > release/student/SHA256SUMS.txt
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: mohen-student-1.1.1-macos-arm64
+          path: |
+            desktop/release/student/*.dmg
+            desktop/release/student/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
