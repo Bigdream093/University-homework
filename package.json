@@ -9,8 +9,13 @@
   "scripts": {
     "dev": "concurrently -n server,web -c blue,green \"npm run dev -w server\" \"npm run dev -w web\"",
     "build": "npm run build -w web",
+    "build:desktop": "npm run build --prefix desktop",
+    "build:desktop:teacher": "npm run build:teacher --prefix desktop",
+    "build:desktop:student": "npm run build:student --prefix desktop",
+    "build:desktop:student:mac": "npm run build:student:mac --prefix desktop",
     "start": "npm run start -w server",
-    "test": "npm run test -w server"
+    "test": "npm run test -w server",
+    "verify": "npm run build -w web && npm run build --prefix desktop"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"

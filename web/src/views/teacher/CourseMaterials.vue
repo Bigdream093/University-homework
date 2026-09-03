@@ -1,93 +1,143 @@
 <script setup>
-import { onMounted, ref } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { useUpload } from '../../composables/useUpload.js';
-import { useRefresh } from '../../composables/useRefresh.js';
-import api, { messageOf } from '../../api/request.js';
-import { downloadBlob, formatFileSize } from '../../utils/files.js';
+import { ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { useChunkedUpload } from '../../composables/useChunkedUpload.js'
+import { useRefresh } from '../../composables/useRefresh.js'
+import api, { messageOf } from '../../api/request.js'
+import { formatFileSize } from '../../utils/files.js'
+import FileDropZone from '../../components/FileDropZone.vue'
+import DownloadTask from '../../components/DownloadTask.vue'
+import { useDownload } from '../../composables/useDownload.js'
 
-const props = defineProps({ courseId: { type: [String, Number], required: true },readonly:Boolean });
-const materials = ref([]);
-const dialog = ref(false);
-const editId = ref(null);
-const form = ref({ title: '', description: '', file: null });
-const MATERIAL_MAX_BYTES = 10 * 1024 ** 3;
-const uploading = ref(false);
-const upload=useUpload(),{percent,state,busy,loaded,total}=upload;
-const readers=ref([]),readersDialog=ref(false);
-async function showReaders(m){try{readers.value=(await api.get('/materials/'+m.id+'/downloads')).data;readersDialog.value=true;}catch(e){ElMessage.error(messageOf(e));}}
-
-async function load() {
+const props = defineProps({
+  courseId: { type: [String, Number], required: true },
+  readonly: Boolean,
+})
+const materials = ref([])
+const dialog = ref(false)
+const editId = ref(null)
+const form = ref({ title: '', description: '', file: null })
+const MATERIAL_MAX_BYTES = 10 * 1024 ** 3
+const uploading = ref(false)
+const upload = useChunkedUpload(),
+  { percent, state, busy, loaded, total } = upload
+const readers = ref([]),
+  readersDialog = ref(false)
+const downloadTask = useDownload()
+async function showReaders(material) {
   try {
-    materials.value = (await api.get(`/courses/${props.courseId}/materials`)).data;
+    readers.value = (await api.get('/materials/' + material.id + '/downloads')).data
+    readersDialog.value = true
   } catch (error) {
-    ElMessage.error(messageOf(error));
+    ElMessage.error(messageOf(error))
   }
 }
 
-function open(m) {
-  editId.value = m?.id || null;
-  form.value = { title: m?.title || '', description: m?.description || '', file: null };
-  dialog.value = true;
+async function load() {
+  try {
+    materials.value = (await api.get(`/courses/${props.courseId}/materials`)).data
+  } catch (error) {
+    ElMessage.error(messageOf(error))
+  }
+}
+
+function openMaterialDialog(material) {
+  editId.value = material?.id || null
+  form.value = {
+    title: material?.title || '',
+    description: material?.description || '',
+    file: null,
+  }
+  dialog.value = true
 }
 
 async function save() {
   if (!form.value.title.trim()) {
-    ElMessage.warning('请填写资料标题');
-    return;
+    ElMessage.warning('请填写资料标题')
+    return
   }
   if (!editId.value && !form.value.file) {
-    ElMessage.warning('请选择要上传的资料文件');
-    return;
+    ElMessage.warning('请选择要上传的资料文件')
+    return
   }
   if (form.value.file?.size > MATERIAL_MAX_BYTES) {
-    ElMessage.warning('课程资料单文件不能超过10GB');
-    return;
+    ElMessage.warning('课程资料单文件不能超过10GB')
+    return
   }
-  uploading.value = true;
+  uploading.value = true
   try {
-    const fd = new FormData();
-    fd.append('title', form.value.title);
-    fd.append('description', form.value.description);
-    if (form.value.file) fd.append('file', form.value.file);
-    await upload.run({url:editId.value?`/materials/${editId.value}`:`/courses/${props.courseId}/materials`,method:editId.value?'put':'post',statusUrl:editId.value?`/materials/${editId.value}/upload-status/`:`/courses/${props.courseId}/material-upload-status/`,fields:{title:form.value.title,description:form.value.description},file:form.value.file});
-    dialog.value = false;
-    ElMessage.success(editId.value ? '资料已更新' : '资料已上传');
-    load();
+    const fd = new FormData()
+    fd.append('title', form.value.title)
+    fd.append('description', form.value.description)
+    if (form.value.file) fd.append('file', form.value.file)
+    const metadata = { title: form.value.title, description: form.value.description }
+    await upload.run({
+      kind: 'material',
+      target: editId.value
+        ? { mode: 'update', material_id: editId.value }
+        : { mode: 'create', course_id: Number(props.courseId) },
+      metadata,
+      files: [{ role: 'file', file: form.value.file, order: 0 }],
+      legacy: {
+        url: editId.value ? `/materials/${editId.value}` : `/courses/${props.courseId}/materials`,
+        method: editId.value ? 'put' : 'post',
+        statusUrl: editId.value
+          ? `/materials/${editId.value}/upload-status/`
+          : `/courses/${props.courseId}/material-upload-status/`,
+        fields: metadata,
+        file: form.value.file,
+      },
+    })
+    dialog.value = false
+    ElMessage.success(editId.value ? '资料已更新' : '资料已上传')
+    load()
   } catch (error) {
-    ElMessage.error(messageOf(error));
+    if (!['UPLOAD_PAUSED', 'UPLOAD_CANCELLED'].includes(error.code))
+      ElMessage.error(messageOf(error))
   } finally {
-    uploading.value = false;
+    uploading.value = false
   }
 }
 
-async function download(m) {
+async function downloadMaterial(material) {
+  await downloadTask.start({
+    endpoint: `/api/materials/${material.id}/file`,
+    ticket: { kind: 'material', id: material.id },
+    fileName: material.file_name || '资料',
+    fileSize: material.file_size || 0,
+  })
+}
+
+async function removeMaterial(material) {
   try {
-    const response = await api.get(`/materials/${m.id}/file`, { responseType: 'blob',timeout:0 });
-    downloadBlob(response.data, m.file_name || '资料');
+    await ElMessageBox.confirm(
+      `确定删除资料「${material.title}」？删除后文件将一并移除。`,
+      '确认',
+      {
+        type: 'warning',
+      },
+    )
+    await api.delete(`/materials/${material.id}`)
+    ElMessage.success('资料已删除')
+    load()
   } catch (error) {
-    ElMessage.error(messageOf(error));
+    if (error !== 'cancel') ElMessage.error(messageOf(error))
   }
 }
 
-async function remove(m) {
-  try {
-    await ElMessageBox.confirm(`确定删除资料「${m.title}」？删除后文件将一并移除。`, '确认', { type: 'warning' });
-    await api.delete(`/materials/${m.id}`);
-    ElMessage.success('资料已删除');
-    load();
-  } catch (error) {
-    if (error !== 'cancel') ElMessage.error(messageOf(error));
-  }
-}
-
-useRefresh(load);
+useRefresh(load)
 </script>
 
 <template>
   <div>
     <div class="toolbar">
-      <el-button type="primary" color="#15554e" :disabled="readonly" @click="open()">上传资料</el-button>
+      <el-button
+        type="primary"
+        color="#15554e"
+        :disabled="readonly"
+        @click="openMaterialDialog()"
+        >上传资料</el-button
+      >
       <span class="hint">支持文档、图片、视频、设计源文件和压缩包，单文件最多10GB</span>
     </div>
     <el-table v-if="materials.length" :data="materials" stripe border>
@@ -100,9 +150,17 @@ useRefresh(load);
       <el-table-column prop="created_at" label="上传时间" width="180" />
       <el-table-column label="操作" width="250">
         <template #default="{ row }">
-          <el-button link @click="showReaders(row)">下载名单</el-button><el-button link type="primary" @click="download(row)">下载</el-button>
-          <el-button link :disabled="readonly" @click="open(row)">编辑</el-button>
-          <el-button link type="danger" :disabled="readonly" @click="remove(row)">删除</el-button>
+          <el-button link @click="showReaders(row)">查看下载记录</el-button
+          ><el-button
+            link
+            type="primary"
+            @click="downloadMaterial(row)"
+            >下载</el-button
+          >
+          <el-button link :disabled="readonly" @click="openMaterialDialog(row)">编辑</el-button>
+          <el-button link type="danger" :disabled="readonly" @click="removeMaterial(row)"
+            >删除</el-button
+          >
         </template>
       </el-table-column>
     </el-table>
@@ -117,21 +175,55 @@ useRefresh(load);
           <el-input v-model="form.description" type="textarea" :rows="3" />
         </el-form-item>
         <el-form-item label="文件">
-          <input :disabled="busy" id="material-file" type="file" hidden @change="form.file = $event.target.files[0]">
-          <label
-            for="material-file"
-            style="display: block; border: 1px dashed #9bb8b2; border-radius: 12px; padding: 18px; text-align: center; cursor: pointer; background: #f7fbf9"
-          >
-            <b>{{ form.file ? form.file.name : (editId ? '不更换文件（如需要请重新选择）' : '点击选择文件') }}</b>
-          </label>
+          <FileDropZone
+            v-model="form.file"
+            :disabled="busy"
+            :placeholder="
+              editId ? '不更换文件（如需要请拖拽或重新选择）' : '点击选择或拖拽文件到这里'
+            "
+          />
         </el-form-item>
       </el-form>
-      <el-progress v-if="state" :percentage="percent" :indeterminate="!total&&busy"/><p v-if="state" class="hint">已传 {{(loaded/1024/1024).toFixed(1)}} MB / {{total?(total/1024/1024).toFixed(1)+' MB':'总大小待确认'}}</p><p role="status">{{state}}</p>
+      <el-progress v-if="state" :percentage="percent" :indeterminate="!total && busy" />
+      <p v-if="state" class="hint">
+        已传 {{ (loaded / 1024 / 1024).toFixed(1) }} MB /
+        {{ total ? (total / 1024 / 1024).toFixed(1) + ' MB' : '总大小待确认' }}
+      </p>
+      <p role="status">{{ state }}</p>
       <template #footer>
-        <el-button :disabled="busy" @click="dialog = false">关闭</el-button><el-button v-if="busy" @click="upload.cancel">取消等待并查询</el-button>
-        <el-button type="primary" color="#15554e" :loading="uploading" @click="save">保存</el-button>
+        <el-button :disabled="busy" @click="dialog = false">关闭</el-button
+        ><el-button v-if="busy" @click="upload.pause">暂停</el-button
+        ><el-button
+          v-if="state && !state.includes('已保存')"
+          type="danger"
+          plain
+          @click="upload.cancel"
+          >取消上传</el-button
+        >
+        <el-button type="primary" color="#15554e" :loading="uploading" @click="save"
+          >保存</el-button
+        >
       </template>
     </el-dialog>
-    <el-dialog v-model="readersDialog" title="学生下载名单" width="min(780px,94vw)"><el-table :data="readers"><el-table-column prop="username" label="账号"/><el-table-column prop="name" label="姓名"/><el-table-column prop="download_count" label="完整下载次数"/><el-table-column prop="first_downloaded_at" label="首次下载"/><el-table-column prop="last_downloaded_at" label="最近下载"/></el-table></el-dialog>
+    <el-dialog v-model="readersDialog" title="学生下载名单" width="min(780px,94vw)"
+      ><el-table :data="readers"
+        ><el-table-column prop="username" label="账号" /><el-table-column
+          prop="name"
+          label="姓名" /><el-table-column
+          prop="download_count"
+          label="完整下载次数" /><el-table-column
+          prop="first_downloaded_at"
+          label="首次下载" /><el-table-column
+          prop="last_downloaded_at"
+          label="最近下载" /></el-table
+    ></el-dialog>
+    <DownloadTask
+      :tasks="downloadTask.tasks.value"
+      @pause="downloadTask.pause"
+      @resume="downloadTask.resume"
+      @cancel="downloadTask.cancel"
+      @open-folder="downloadTask.openFolder"
+      @dismiss="downloadTask.dismiss"
+    />
   </div>
 </template>

@@ -1,31 +1,132 @@
 <script setup>
-import { onMounted, ref, nextTick } from 'vue';
-import { ElMessage } from 'element-plus';
-import { useRefresh } from '../../composables/useRefresh.js';
-import api, { messageOf } from '../../api/request.js';
-const props = defineProps({ courseId: { type: [String, Number], required: true } });
-const emit=defineEmits(['read']);
-const notices = ref([]), detail = ref(null), dialog = ref(false);
-let openSequence = 0,loadSequence=0;
-async function load() { const sequence=++loadSequence,courseId=props.courseId;try { const data=(await api.get(`/courses/${courseId}/notices`)).data;if(sequence===loadSequence)notices.value=data; } catch (error) { if(sequence===loadSequence)ElMessage.error(messageOf(error)); } }
-async function open(item) { const sequence=++openSequence;try { const d=(await api.get(`/notices/${item.id}`)).data;if(sequence!==openSequence)return;detail.value=d;dialog.value=true;await nextTick();if(sequence!==openSequence)return;if(d.status==='published'){await api.post(`/notices/${item.id}/read`,{revision:d.content_revision});if(sequence!==openSequence)return;await load();emit('read');} } catch (error) { if(sequence===openSequence)ElMessage.error(messageOf(error)); } }
-useRefresh(load);
+import { ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { useRefresh } from '../../composables/useRefresh.js'
+import { useCollapse } from '../../composables/useCollapse.js'
+import api, { messageOf } from '../../api/request.js'
+import linkify from '../../utils/linkify.js'
+const props = defineProps({ courseId: { type: [String, Number], required: true } })
+const emit = defineEmits(['read'])
+const notices = ref([])
+// 学生列表接口只返回 160 字摘要，展开时按需拉取完整正文。
+const details = ref({})
+const noticeCard = useCollapse()
+let loadSequence = 0
+// 序号按通知 ID 管理：只取消同一条通知的旧请求，不同通知互不影响。
+const readSequences = new Map()
+function nextSequence(id) {
+  const value = (readSequences.get(id) || 0) + 1
+  readSequences.set(id, value)
+  return value
+}
+async function load() {
+  const sequence = ++loadSequence,
+    courseId = props.courseId
+  try {
+    const data = (await api.get(`/courses/${courseId}/notices`)).data
+    if (sequence === loadSequence) notices.value = data
+  } catch (error) {
+    if (sequence === loadSequence) ElMessage.error(messageOf(error))
+  }
+}
+// 点击折叠卡片展开正文；首次展开未读通知时记为已读。
+async function toggle(notice) {
+  const opening = !noticeCard.isOpen(notice.id)
+  noticeCard.toggle(notice.id)
+  if (!opening) return
+  const sequence = nextSequence(notice.id)
+  try {
+    const detail = (await api.get(`/notices/${notice.id}`)).data
+    if (sequence !== readSequences.get(notice.id)) return
+    details.value = { ...details.value, [notice.id]: detail }
+    if (detail.status !== 'published') return
+    await api.post(`/notices/${notice.id}/read`, { revision: detail.content_revision })
+    if (sequence !== readSequences.get(notice.id)) return
+    await load()
+    emit('read')
+  } catch (error) {
+    if (sequence === readSequences.get(notice.id)) ElMessage.error(messageOf(error))
+  }
+}
+useRefresh(load)
 </script>
 <template>
   <div>
     <div v-if="notices.length">
-      <article v-for="n in notices" :key="n.id" class="assignment-card" style="cursor:pointer" @click="open(n)">
-        <span v-if="n.pinned" class="badge" style="background:#e6a23c">置顶</span>
-        <span v-if="n.status==='published'&&!n.is_read" class="badge">未读</span>
-        <span v-if="n.is_updated" class="badge" style="background:#409eff">已更新</span>
-        <h3>{{ n.title }}</h3><p>{{ n.content_preview }}</p>
-        <span class="hint">{{ n.status === 'withdrawn' ? `撤回于 ${n.withdrawn_at}` : `发布于 ${n.published_at || n.created_at}` }}</span>
+      <article v-for="notice in notices" :key="notice.id" class="notice-card collapsible-card">
+        <div class="card-head" @click="toggle(notice)">
+          <div class="notice-badges">
+            <span v-if="notice.pinned" class="badge" style="background: #e6a23c">置顶</span>
+            <span v-if="notice.status === 'published' && !notice.is_read" class="badge">未读</span>
+            <span v-if="notice.is_updated" class="badge" style="background: #409eff">已更新</span>
+            <span
+              v-if="notice.status === 'withdrawn'"
+              class="badge"
+              style="background: #c0c4cc; color: #fff"
+              >已撤回</span
+            >
+          </div>
+          <h3 class="card-title">{{ notice.title }}</h3>
+          <span class="hint">{{
+            notice.status === 'withdrawn'
+              ? `撤回于 ${notice.withdrawn_at}`
+              : `发布于 ${notice.published_at || notice.created_at}`
+          }}</span>
+          <span class="card-chevron">{{ noticeCard.isOpen(notice.id) ? '收起 ▲' : '展开 ▼' }}</span>
+        </div>
+        <div v-if="noticeCard.isOpen(notice.id)" class="card-body">
+          <el-alert
+            v-if="notice.status === 'withdrawn'"
+            title="该通知已被教师撤回"
+            type="warning"
+            :description="`撤回时间：${notice.withdrawn_at}`"
+            show-icon
+            :closable="false"
+            style="margin-bottom: 12px"
+          />
+          <p
+            v-else-if="details[notice.id]"
+            class="notice-content"
+            style="margin: 0"
+            v-html="linkify(details[notice.id].content)"
+          ></p>
+          <p v-else class="notice-content" style="margin: 0">{{ notice.content_preview }}</p>
+        </div>
       </article>
-    </div><div v-else class="empty">老师还没有发布通知。</div>
-    <el-dialog v-model="dialog" :title="detail?.title" width="min(640px,92vw)">
-      <el-alert v-if="detail?.status==='withdrawn'" title="该通知已被教师撤回" type="warning" :description="`撤回时间：${detail.withdrawn_at}`" show-icon :closable="false" />
-      <p v-if="detail?.status==='published'" class="hint">计划：{{detail.scheduled_at||'立即发布'}} · 实际发布：{{detail.published_at}} · 修改：{{detail.updated_at}}</p>
-      <p v-if="detail?.status==='published'" style="white-space:pre-wrap;line-height:1.8;color:#566e69">{{ detail?.content }}</p>
-    </el-dialog>
+    </div>
+    <div v-else class="empty">老师还没有发布通知。</div>
   </div>
 </template>
+<style scoped>
+.notice-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  margin-bottom: 12px;
+  background: #fff;
+  transition: box-shadow 0.2s;
+}
+.notice-card:hover {
+  box-shadow: 0 10px 26px rgba(25, 83, 73, 0.1);
+}
+.notice-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.notice-card h3 {
+  margin: 0;
+}
+.notice-content {
+  white-space: pre-wrap;
+  line-height: 1.8;
+  color: #566e69;
+}
+.notice-content :deep(a) {
+  color: var(--green);
+  text-decoration: underline;
+  word-break: break-all;
+}
+.notice-content :deep(a:hover) {
+  color: var(--green2);
+}
+</style>

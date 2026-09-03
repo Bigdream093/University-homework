@@ -1,6 +1,50 @@
 <script setup>
-import { reactive, ref } from 'vue'; import { useRoute,useRouter } from 'vue-router'; import { ElMessage } from 'element-plus'; import api,{messageOf} from '../api/request.js'; import {useUserStore} from '../stores/user.js';
-const form=reactive({oldPassword:'',newPassword:'',confirm:''}),loading=ref(false),route=useRoute(),router=useRouter(),store=useUserStore();
-async function save(){if(form.newPassword!==form.confirm)return ElMessage.warning('两次输入的新密码不一致');loading.value=true;try{await api.put('/auth/password',form);ElMessage.success('密码已修改，请重新登录');const redirect=typeof route.query.redirect==='string'?route.query.redirect:'';store.logout();router.push({path:'/login',query:redirect?{redirect}:{}});}catch(e){ElMessage.error(messageOf(e));}finally{loading.value=false}}
+import { reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import api, { messageOf } from '../api/request.js'
+import { useUserStore } from '../stores/user.js'
+const form = reactive({ oldPassword: '', newPassword: '', confirm: '' }),
+  loading = ref(false),
+  route = useRoute(),
+  router = useRouter(),
+  store = useUserStore()
+async function save() {
+  if (form.newPassword !== form.confirm) return ElMessage.warning('两次输入的新密码不一致')
+  loading.value = true
+  try {
+    await api.put('/auth/password', form)
+    ElMessage.success('密码已修改，请重新登录')
+    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : ''
+    store.logout()
+    router.push({ path: '/login', query: redirect ? { redirect } : {} })
+  } catch (error) {
+    ElMessage.error(messageOf(error))
+  } finally {
+    loading.value = false
+  }
+}
 </script>
-<template><div><div class="page-head"><div><h1>修改密码</h1><p>建议使用至少8位且不易猜测的密码</p></div></div><div class="panel" style="max-width:520px"><el-form label-position="top"><el-form-item label="原密码"><el-input v-model="form.oldPassword" type="password" show-password/></el-form-item><el-form-item label="新密码"><el-input v-model="form.newPassword" type="password" show-password/></el-form-item><el-form-item label="确认新密码"><el-input v-model="form.confirm" type="password" show-password/></el-form-item><el-button type="primary" color="#15554e" :loading="loading" @click="save">保存新密码</el-button></el-form></div></div></template>
+<template>
+  <div>
+    <div class="page-head">
+      <div>
+        <h1>修改密码</h1>
+        <p>建议使用至少8位且不易猜测的密码</p>
+      </div>
+    </div>
+    <div class="panel" style="max-width: 520px">
+      <el-form label-position="top"
+        ><el-form-item label="原密码"
+          ><el-input v-model="form.oldPassword" type="password" show-password /></el-form-item
+        ><el-form-item label="新密码"
+          ><el-input v-model="form.newPassword" type="password" show-password /></el-form-item
+        ><el-form-item label="确认新密码"
+          ><el-input v-model="form.confirm" type="password" show-password /></el-form-item
+        ><el-button type="primary" color="#15554e" :loading="loading" @click="save"
+          >保存新密码</el-button
+        ></el-form
+      >
+    </div>
+  </div>
+</template>
