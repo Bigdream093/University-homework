@@ -41,7 +41,7 @@ onMounted(async () => {
         <el-button @click="$router.back()">返回上一页</el-button>
         <h1>墨痕使用说明书</h1>
         <p>
-          2026.09 统一更新版 ·
+          1.5.2 统一更新版 ·
           {{ user?.role === 'teacher' ? '教师手册' : user ? '学生手册' : '登录帮助' }}
         </p>
       </div>
