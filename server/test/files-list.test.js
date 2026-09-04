@@ -32,7 +32,7 @@ function getBinary(url, token) {
     })
 }
 
-test('submissions list exposes every append-mode file and each history file is downloadable', async () => {
+test('submissions list exposes every append-mode file; first and latest versions are downloadable', async () => {
   const teacherLogin = await request(app)
     .post('/api/auth/login')
     .send({ username: 'teacher', password: '123456' })

@@ -15,6 +15,8 @@ fs.mkdirSync(process.env.UPLOAD_DIR, { recursive: true })
 
 const { app } = await import('../src/index.js')
 const { db } = await import('../src/db.js')
+const { processCleanupBatch } = await import('../src/services/storage.js')
+const { resolveUploadPath } = await import('../src/utils/uploadPath.js')
 
 after(() => {
   db.close()
@@ -57,7 +59,7 @@ function addTeacher(username) {
   return info.lastInsertRowid
 }
 
-test('notices: teacher CRUD, student only sees published, permissions enforced', async () => {
+test('notices: teacher creates, edits and withdraws; student visibility and ownership enforced', async () => {
   const teacherToken = await login('teacher')
   const courseId = await makeCourse(teacherToken)
   await request(app)
@@ -162,6 +164,10 @@ test('materials: teacher uploads, student lists and downloads, delete removes fi
   assert.equal(upload.status, 201)
   const materialId = upload.body.id
   assert.equal(upload.body.file_name, '讲义.pdf')
+  const stored = db.prepare('SELECT file_url FROM materials WHERE id=?').get(materialId)
+  const physicalFile = resolveUploadPath(stored.file_url)
+  assert.ok(physicalFile && path.isAbsolute(physicalFile))
+  assert.equal(fs.readFileSync(physicalFile, 'utf8'), '讲义内容')
 
   const studentList = await request(app)
     .get(`/api/courses/${courseId}/materials`)
@@ -213,6 +219,9 @@ test('materials: teacher uploads, student lists and downloads, delete removes fi
     .delete(`/api/materials/${materialId}`)
     .set('Authorization', `Bearer ${teacherToken}`)
   assert.equal(del.status, 200)
+  processCleanupBatch()
+  assert.equal(db.prepare('SELECT id FROM materials WHERE id=?').get(materialId), undefined)
+  assert.equal(fs.existsSync(physicalFile), false, '删除资料后物理文件必须清理')
 
   const gone = await getBinary(`/api/materials/${materialId}/file`, studentToken)
   assert.equal(gone.status, 404, '删除后文件不可再下载')
@@ -221,9 +230,32 @@ test('materials: teacher uploads, student lists and downloads, delete removes fi
 test('materials: non-enrolled student cannot list or download', async () => {
   const teacherToken = await login('teacher')
   const courseId = await makeCourse(teacherToken, '别人课程')
-  const studentToken = await login('20260001')
+  const ownCourseId = await makeCourse(teacherToken, '独立准备非成员账号')
+  await request(app)
+    .post(`/api/courses/${ownCourseId}/students`)
+    .set('Authorization', `Bearer ${teacherToken}`)
+    .send({ username: 'material-outsider', name: '资料非成员' })
+    .expect(201)
+  const studentToken = await login('material-outsider')
+  const uploaded = await request(app)
+    .post(`/api/courses/${courseId}/materials`)
+    .set('Authorization', `Bearer ${teacherToken}`)
+    .field('title', '受保护资料')
+    .attach('file', Buffer.from('private material'), { filename: 'private.txt' })
+  assert.equal(uploaded.status, 201, uploaded.text)
+  const materialId = uploaded.body.id
+  const authorized = await getBinary(`/api/materials/${materialId}/file`, teacherToken)
+  assert.equal(authorized.status, 200)
+  assert.equal(authorized.body.toString(), 'private material')
   const list = await request(app)
     .get(`/api/courses/${courseId}/materials`)
     .set('Authorization', `Bearer ${studentToken}`)
   assert.equal(list.status, 403, '未加入课程的学生不能查看资料')
+  await request(app).get(`/api/materials/${materialId}/file`)
+    .set('Authorization', `Bearer ${studentToken}`).expect(403)
+  await request(app).post(`/api/materials/${materialId}/download-ticket`)
+    .set('Authorization', `Bearer ${studentToken}`).expect(403)
+  await request(app).post('/api/downloads/ticket')
+    .set('Authorization', `Bearer ${studentToken}`)
+    .send({ kind: 'material', id: materialId }).expect(403)
 })

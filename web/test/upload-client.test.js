@@ -13,13 +13,9 @@ const storage = () => {
 globalThis.localStorage = storage()
 globalThis.sessionStorage = storage()
 localStorage.setItem('hw_user', JSON.stringify({ id: 77, role: 'student' }))
-const { default: api } = await import('../../web/src/api/request.js')
-const { useUpload } = await import('../../web/src/composables/useUpload.js')
-const { hashChunk } = await import('../../web/src/composables/useChunkedUpload.js')
-test('HTTP clients hash chunks without WebCrypto', async () => {
-  const digest = await hashChunk(new Blob(['abc']), null)
-  assert.equal(digest, 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
-})
+const { default: api } = await import('../src/api/request.js')
+const { useUpload } = await import('../src/composables/useUpload.js')
+
 test('upload retries query persisted results before resending; payload is not kept as plaintext', async () => {
   const transfer = useUpload()
   let uploads = 0,

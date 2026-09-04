@@ -148,7 +148,9 @@ onMounted(load)
         <div class="meta-row">
           <span>{{ course.student_count }} 名学生</span
           ><span>{{ course.assignment_count }} 项作业</span
-          ><span>{{ c.status === 'archived' ? '已归档' : '邀请码 ' + c.invite_code }}</span>
+          ><span>
+            {{ course.status === 'archived' ? '已归档' : '邀请码 ' + course.invite_code }}
+          </span>
         </div>
       </article>
     </div>

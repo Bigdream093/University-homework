@@ -179,7 +179,7 @@ test('append mode keeps every uploaded file and the package zip contains all ver
   assert.equal(browserZip.body.readUInt32LE(0), 0x04034b50)
 })
 
-test('overwrite mode still removes the replaced physical file and zip keeps only latest', async () => {
+test('overwrite mode removes the replaced physical file and zip contains one entry', async () => {
   const teacherToken = await teacherLogin()
   const courseId = await makeCourse(teacherToken)
   await request(app)

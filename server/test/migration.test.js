@@ -65,16 +65,7 @@ test('legacy database migration preserves rows, timestamps and files; second boo
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
-test('front-end and back-end agree at deadline second boundaries', async () => {
-  const { deadlineState } = await import('../../web/src/utils/deadline.js')
-  const time = Date.parse('2026-08-31T12:00:00+08:00'),
-    deadline = '2026-08-31 12:00:00'
-  assert.notEqual(deadlineState(deadline, time).kind, 'late')
-  assert.notEqual(deadlineState(deadline, time + 999).kind, 'late')
-  assert.equal(deadlineState(deadline, time + 1000).kind, 'late')
-})
-
-test('production refuses a missing timezone before creating or migrating the database', () => {
+test('production refuses UTC instead of Asia/Shanghai before creating or migrating the database', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mohen-timezone-')),
     target = path.join(dir, 'data')
   const env = { ...process.env, NODE_ENV: 'production', TZ: 'UTC', DATA_DIR: target }

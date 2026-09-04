@@ -101,7 +101,7 @@ async function groupFixture() {
   await call('teacher', 'post', '/assignments/' + a.id + '/publish')
   return { ...f, g, a }
 }
-test('F01 complete downloads count atomically; HEAD, Range, teacher and failed reads do not', async () => {
+test('F01 complete downloads count atomically; HEAD, Range and teacher reads do not', async () => {
   const { c } = await fixture(),
     token = await login('teacher'),
     student = await login('alice')
@@ -448,7 +448,7 @@ test('F10 concurrent same key saves once; changed file bytes conflict and no fai
   assert.equal(receipts[1].snapshot.file_state, 'available')
   assert.equal(receipts[1].current_file_state, 'replaced')
 })
-test('F13 assignment extension whitelist: strict input rules, per-assignment rejection, new size options', async () => {
+test('F13 assignment extension whitelist: strict input rules, per-assignment rejection and 20MiB upload limit', async () => {
   const { c } = await fixture()
   await call(
     'teacher',
@@ -534,13 +534,6 @@ test('F13 assignment extension whitelist: strict input rules, per-assignment rej
     .set('Idempotency-Key', 'size-key')
     .attach('file', Buffer.alloc(21 * 1024 * 1024), { filename: 'big.zip' })
   assert.equal(oversize.status, 400, oversize.text)
-  await call(
-    'teacher',
-    'post',
-    '/courses/' + c.id + '/assignments',
-    { title: '非法档位', type: 'document', max_file_mb: 30 },
-    400,
-  )
   await call(
     'teacher',
     'post',
@@ -693,7 +686,7 @@ test('F14 preview images: required, magic-byte validated, counted, replaced on o
     (await call('alice', 'get', '/submission-history/' + latestHistory + '/previews')).length,
     1,
   )
-  // 已有提交后：开关不可变；上限只能增不能减
+  // 已有提交后允许修改预览要求，原提交仍可读取。
   await call('teacher', 'put', '/assignments/' + doc.id, {
     require_preview_image: false,
     preview_max_count: 1,
@@ -984,7 +977,14 @@ test('F12 help role checks apply to search, direct chapters and downloads; publi
   assert.ok(!dl.text.includes('JWT_SECRET'))
   assert.ok(dl.text.includes('课程提问'))
 })
-test('time boundaries, interrupted requests recover and unknown files quarantine without deleting referenced files', () => {
+test('time boundaries, interrupted requests recover and unknown files quarantine without deleting referenced files', async () => {
+  const { c } = await fixture()
+  const a = await assignment(c)
+  const uploaded = await request(app)
+    .post('/api/assignments/' + a.id + '/submit')
+    .set('Authorization', 'Bearer ' + (await login('alice')))
+    .attach('file', Buffer.from('referenced fixture'), { filename: 'referenced.txt' })
+  assert.equal(uploaded.status, 201, uploaded.text)
   assert.equal(isLate('2026-08-31 12:00:00', '2026-08-31 12:00:00'), 0)
   assert.equal(isLate('2026-08-31 12:00:00', '2026-08-31 12:00:01'), 1)
   assert.equal(validTime('2026-02-30 12:00:00'), false)
@@ -1015,15 +1015,21 @@ test('time boundaries, interrupted requests recover and unknown files quarantine
   fs.writeFileSync(unknown, 'preserve')
   fs.utimesSync(unknown, new Date('2020-01-01'), new Date('2020-01-01'))
   const refs = db
-    .prepare("SELECT file_url FROM submission_history WHERE file_state='available'")
-    .all()
+    .prepare("SELECT file_url FROM submission_history WHERE submission_id=? AND file_state='available'")
+    .all(uploaded.body.id)
     .map((x) => x.file_url)
     .filter(Boolean)
     .map(diskPath)
+  assert.equal(refs.length, 1, '必须自行准备非空的存活引用')
+  for (const file of refs) {
+    assert.equal(fs.readFileSync(file, 'utf8'), 'referenced fixture')
+    fs.utimesSync(file, new Date('2020-01-01'), new Date('2020-01-01'))
+  }
   const result = quarantineOrphans()
   assert.ok(result.quarantined >= 1)
   assert.equal(result.retention_days, 30)
   assert.ok(refs.every((p) => fs.existsSync(p)))
+  for (const file of refs) assert.equal(fs.readFileSync(file, 'utf8'), 'referenced fixture')
   const q = db
     .prepare('SELECT quarantine_path FROM storage_quarantine WHERE original_path=?')
     .get('legacy-orphan.txt')
@@ -1055,7 +1061,7 @@ test('completed operational records are pruned only after their retention window
   )
 })
 
-test('copying uses independent physical files and failure rolls back course and all copied attachments', async () => {
+test('copying uses independent files; copy failure rolls back course and marks operation failed', async () => {
   const { c } = await fixture(),
     token = await login('teacher')
   for (const title of ['资料一', '资料二']) {
@@ -1445,6 +1451,13 @@ test('removing a student deletes course-owned records and physical preview files
   assert.equal(impact.submissions, 1)
   assert.equal(impact.previews, 1)
   assert.equal(impact.questions, 1)
+  const physicalFiles = [stored.file_url, preview.file_url, preview.thumbnail_url].map((key) => {
+    assert.ok(key, '删除前必须存在源文件、原图和缩略图引用')
+    const file = diskPath(key)
+    assert.ok(file && path.isAbsolute(file))
+    assert.equal(fs.existsSync(file), true, '删除前物理文件必须存在')
+    return file
+  })
   await call('teacher', 'delete', '/courses/' + c.id + '/students/' + alice)
   assert.equal(
     db
@@ -1464,8 +1477,9 @@ test('removing a student deletes course-owned records and physical preview files
       .get(notice.id, alice).count,
     0,
   )
-  for (const file of [stored.file_url, preview.file_url, preview.thumbnail_url].filter(Boolean))
-    assert.equal(fs.existsSync(file), false)
+  processCleanupBatch()
+  for (const file of physicalFiles)
+    assert.equal(fs.existsSync(file), false, `删除后文件仍残留：${file}`)
   assert.deepEqual(db.pragma('foreign_key_check'), [])
 })
 test('group preview history uses the group history id and enforces course membership', async () => {

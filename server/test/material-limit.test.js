@@ -42,7 +42,7 @@ test('course material size limit uses its independent configuration and maps Mul
   )
 })
 
-test('course materials accept desktop installers without allowing executables as submissions', async () => {
+test('course materials accept exe, msi, dmg and pkg installers', async () => {
   const login = await request(app)
     .post('/api/auth/login')
     .send({ username: 'teacher', password: '123456' })

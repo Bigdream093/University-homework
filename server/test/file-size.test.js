@@ -52,17 +52,23 @@ async function makeAssignment(token, courseId, extra = {}) {
     })
 }
 
-test('assignment rejects file-size presets outside the four options', async () => {
+test('assignment accepts seven file-size presets and rejects unsupported values', async (t) => {
   const teacherToken = await teacherLogin()
   const courseId = await makeCourse(teacherToken)
-  const bad = await makeAssignment(teacherToken, courseId, { max_file_mb: 300 })
-  assert.equal(bad.status, 400, '非四档值被拒绝')
-  const ok = await makeAssignment(teacherToken, courseId, { max_file_mb: 200 })
-  assert.equal(ok.status, 201)
-  assert.equal(ok.body.max_file_mb, 200)
-  const gig = await makeAssignment(teacherToken, courseId, { max_file_mb: 1024 })
-  assert.equal(gig.status, 201)
-  assert.equal(gig.body.max_file_mb, 1024)
+  for (const limit of [10, 20, 50, 100, 200, 500, 1024]) {
+    await t.test(`accepts ${limit} MiB`, async () => {
+      const response = await makeAssignment(teacherToken, courseId, { max_file_mb: limit })
+      assert.equal(response.status, 201, response.text)
+      assert.equal(response.body.max_file_mb, limit)
+    })
+  }
+  for (const limit of [30, 300]) {
+    await t.test(`rejects ${limit} MiB`, async () => {
+      const response = await makeAssignment(teacherToken, courseId, { max_file_mb: limit })
+      assert.equal(response.status, 400)
+      assert.match(response.body.message, /文件大小上限/)
+    })
+  }
 })
 
 test('student upload over the assignment limit is rejected with no record and no residue', async () => {
@@ -81,6 +87,15 @@ test('student upload over the assignment limit is rejected with no record and no
   assert.equal(studentLogin.status, 200)
   const studentToken = studentLogin.body.token
 
+  const stagedFiles = () => {
+    const directory = path.join(process.env.UPLOAD_DIR, '.staging')
+    return fs.existsSync(directory)
+      ? fs.readdirSync(directory, { recursive: true, withFileTypes: true })
+          .filter((entry) => entry.isFile()).map((entry) => path.join(entry.parentPath, entry.name)).sort()
+      : []
+  }
+  const stagingBefore = stagedFiles()
+
   const over = await request(app)
     .post(`/api/assignments/${assignmentId}/submit`)
     .set('Authorization', `Bearer ${studentToken}`)
@@ -90,6 +105,11 @@ test('student upload over the assignment limit is rejected with no record and no
     })
   assert.equal(over.status, 400)
   assert.match(over.body.message, /100M/)
+  assert.equal(db.prepare('SELECT count(*) n FROM submissions WHERE assignment_id=?').get(assignmentId).n, 0)
+  assert.equal(db.prepare('SELECT count(*) n FROM submission_history h JOIN submissions s ON s.id=h.submission_id WHERE s.assignment_id=?').get(assignmentId).n, 0)
+  assert.equal(db.prepare('SELECT count(*) n FROM submission_receipts WHERE assignment_id=?').get(assignmentId).n, 0)
+  assert.deepEqual(db.pragma('foreign_key_check'), [])
+  assert.deepEqual(stagedFiles(), stagingBefore, '超限请求结束后暂存文件必须恢复原状')
 
   const under = await request(app)
     .post(`/api/assignments/${assignmentId}/submit`)

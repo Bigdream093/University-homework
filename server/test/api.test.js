@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import bcrypt from 'bcryptjs'
 import request from 'supertest'
+import ExcelJS from 'exceljs'
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mohen-api-'))
 process.env.NODE_ENV = 'test'
@@ -313,8 +314,26 @@ test('grade summary: config validation, weighted scores, regrade and export in r
   const exported = await request(app)
     .get(`/api/courses/${courseId}/summary/export`)
     .set(auth(teacherToken))
+    .buffer(true)
+    .parse((res, callback) => {
+      const chunks = []
+      res.on('data', (chunk) => chunks.push(chunk))
+      res.on('end', () => callback(null, Buffer.concat(chunks)))
+      res.on('error', callback)
+    })
   assert.equal(exported.status, 200)
   assert.match(exported.headers['content-type'], /spreadsheetml/)
+  const workbook = new ExcelJS.Workbook()
+  await workbook.xlsx.load(exported.body)
+  const sheet = workbook.getWorksheet('成绩汇总')
+  assert.ok(sheet)
+  assert.equal(sheet.columnCount, 5)
+  assert.equal(sheet.rowCount, 3)
+  assert.deepEqual(sheet.getRow(1).values.slice(1), ['姓名', '学号', '平时成绩', '期末成绩', '总成绩'])
+  assert.deepEqual(sheet.getRow(2).values.slice(1), ['甲一', '20260101', 45, 70, 60])
+  assert.deepEqual(sheet.getRow(3).values.slice(1), ['乙二', '20260102', 30, '—', 30])
+  for (const [row, columns] of [[2, [3, 4, 5]], [3, [3, 5]]])
+    for (const column of columns) assert.equal(typeof sheet.getCell(row, column).value, 'number')
 
   await request(app).delete(`/api/courses/${courseId}`).set(auth(teacherToken))
 })
