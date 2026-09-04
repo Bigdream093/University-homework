@@ -1,31 +1,38 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>墨痕服务器设置</title>
-  <link rel="stylesheet" href="setup.css">
-</head>
-<body>
-  <main class="setup-card">
-    <div class="brand-row">
-      <div id="role-mark" class="role-mark">墨</div>
-      <div><strong id="product-name">墨痕桌面端</strong><small id="version"></small></div>
-    </div>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>墨痕服务器设置</title>
+    <link rel="stylesheet" href="setup.css" />
+  </head>
+  <body>
+    <main class="setup-card">
+      <div class="brand-row">
+        <div id="role-mark" class="role-mark">墨</div>
+        <div><strong id="product-name">墨痕桌面端</strong><small id="version"></small></div>
+      </div>
 
-    <h1>连接作业管理服务器</h1>
-    <p class="lead">首次启动需要填写 NAS 上的墨痕地址。保存以后会自动连接，修改地址也不需要重新安装。</p>
+      <h1>连接作业管理服务器</h1>
+      <p class="lead">
+        首次启动需要填写 NAS 上的墨痕地址。保存以后会自动连接，修改地址也不需要重新安装。
+      </p>
 
-    <label for="server-url">服务器地址</label>
-    <input id="server-url" type="text" spellcheck="false" placeholder="例如：http://192.168.1.50:34567">
-    <p class="hint">局域网使用 NAS IP；配置公网 HTTPS 后可填写 https://你的域名。</p>
+      <label for="server-url">服务器地址</label>
+      <input
+        id="server-url"
+        type="text"
+        spellcheck="false"
+        placeholder="例如：http://192.168.1.50:34567"
+      />
+      <p class="hint">局域网使用 NAS IP；配置公网 HTTPS 后可填写 https://你的域名。</p>
 
-    <div id="status" class="status" aria-live="polite"></div>
-    <div class="actions">
-      <button id="test" class="secondary" type="button">测试连接</button>
-      <button id="save" class="primary" type="button">保存并进入</button>
-    </div>
-  </main>
-  <script src="setup.js"></script>
-</body>
+      <div id="status" class="status" aria-live="polite"></div>
+      <div class="actions">
+        <button id="test" class="secondary" type="button">测试连接</button>
+        <button id="save" class="primary" type="button">保存并进入</button>
+      </div>
+    </main>
+    <script src="setup.js"></script>
+  </body>
 </html>

@@ -1,14 +1,15 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import Database from 'better-sqlite3';
-import bcrypt from 'bcryptjs';
-import { config } from './config.js';
-import { migrate } from './migrations.js';
+import fs from 'node:fs'
+import path from 'node:path'
+import { randomInt } from 'node:crypto'
+import Database from 'better-sqlite3'
+import bcrypt from 'bcryptjs'
+import { config } from './config.js'
+import { migrate } from './migrations.js'
 
-fs.mkdirSync(config.dataDir, { recursive: true });
-export const db = new Database(path.join(config.dataDir, 'homework.sqlite'));
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+fs.mkdirSync(config.dataDir, { recursive: true })
+export const db = new Database(path.join(config.dataDir, 'homework.sqlite'))
+db.pragma('journal_mode = WAL')
+db.pragma('foreign_keys = ON')
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -32,7 +33,8 @@ CREATE TABLE IF NOT EXISTS assignments (
   title TEXT NOT NULL, description TEXT, type TEXT NOT NULL DEFAULT 'document', deadline TEXT,
   total_score REAL DEFAULT 100, allow_resubmit_count INTEGER DEFAULT 1,
   submission_mode TEXT NOT NULL DEFAULT 'overwrite',
-  status TEXT NOT NULL DEFAULT 'draft', created_at TEXT NOT NULL DEFAULT (datetime('now','+08:00')),
+  status TEXT NOT NULL DEFAULT 'draft', sort_order INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now','+08:00')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now','+08:00'))
 );
 CREATE TABLE IF NOT EXISTS submissions (
@@ -55,7 +57,7 @@ CREATE TABLE IF NOT EXISTS notices (
   id INTEGER PRIMARY KEY AUTOINCREMENT, course_id INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
   teacher_id INTEGER NOT NULL REFERENCES users(id),
   title TEXT NOT NULL, content TEXT NOT NULL DEFAULT '',
-  pinned INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'draft',
+  pinned INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'draft', sort_order INTEGER,
   created_at TEXT NOT NULL DEFAULT (datetime('now','+08:00')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now','+08:00'))
 );
@@ -78,6 +80,71 @@ CREATE TABLE IF NOT EXISTS material_downloads (
   first_downloaded_at TEXT NOT NULL,
   last_downloaded_at TEXT NOT NULL,
   PRIMARY KEY(material_id, student_id)
+);
+CREATE TABLE IF NOT EXISTS material_download_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id TEXT NOT NULL UNIQUE,
+  material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+  student_id INTEGER NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS submission_preview_images (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  submission_history_id INTEGER REFERENCES submission_history(id) ON DELETE CASCADE,
+  group_submission_history_id INTEGER REFERENCES group_submission_history(id) ON DELETE CASCADE,
+  file_url TEXT,
+  thumbnail_url TEXT,
+  original_name TEXT NOT NULL,
+  file_size INTEGER NOT NULL,
+  mime_type TEXT NOT NULL,
+  width INTEGER,
+  height INTEGER,
+  sha256 TEXT NOT NULL,
+  sort_order INTEGER NOT NULL,
+  file_state TEXT NOT NULL DEFAULT 'available',
+  replaced_at TEXT,
+  created_at TEXT NOT NULL,
+  CHECK (
+    (submission_history_id IS NOT NULL) != (group_submission_history_id IS NOT NULL)
+  )
+);
+CREATE INDEX IF NOT EXISTS idx_preview_submission_history ON submission_preview_images(submission_history_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_preview_group_history ON submission_preview_images(group_submission_history_id, sort_order);
+CREATE TABLE IF NOT EXISTS upload_sessions (
+  id TEXT PRIMARY KEY,
+  actor_id INTEGER NOT NULL REFERENCES users(id),
+  kind TEXT NOT NULL CHECK(kind IN ('submission','material')),
+  assignment_id INTEGER REFERENCES assignments(id) ON DELETE CASCADE,
+  course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
+  material_id INTEGER REFERENCES materials(id) ON DELETE CASCADE,
+  mode TEXT,
+  metadata_json TEXT,
+  base_version INTEGER NOT NULL DEFAULT 0,
+  state TEXT NOT NULL DEFAULT 'uploading' CHECK(state IN ('uploading','completing','succeeded','failed','cancelled')),
+  result_json TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  completed_at TEXT,
+  CHECK((kind='submission' AND assignment_id IS NOT NULL AND course_id IS NULL AND material_id IS NULL) OR (kind='material' AND assignment_id IS NULL AND course_id IS NOT NULL))
+);
+CREATE TABLE IF NOT EXISTS upload_session_files (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES upload_sessions(id) ON DELETE CASCADE,
+  file_role TEXT NOT NULL,
+  sort_order INTEGER NOT NULL,
+  original_name TEXT NOT NULL,
+  declared_size INTEGER NOT NULL,
+  uploaded_bytes INTEGER NOT NULL DEFAULT 0,
+  mime_type TEXT,
+  expected_sha256 TEXT,
+  calculated_sha256 TEXT,
+  last_chunk_offset INTEGER,
+  last_chunk_length INTEGER,
+  last_chunk_sha256 TEXT,
+  temporary_path TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'uploading'
 );
 CREATE TABLE IF NOT EXISTS notice_reads (
   notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
@@ -117,7 +184,7 @@ CREATE TABLE IF NOT EXISTS course_questions (
   course_id INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
   student_id INTEGER NOT NULL REFERENCES users(id), title TEXT NOT NULL, content TEXT NOT NULL,
   must_private INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'open',
-  hidden INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0,
+  hidden INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0, sort_order INTEGER,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS question_replies (
@@ -162,53 +229,90 @@ CREATE TABLE IF NOT EXISTS group_submission_history (
   file_state TEXT NOT NULL DEFAULT 'available', is_late INTEGER NOT NULL DEFAULT 0,
   submitted_at TEXT NOT NULL, submitted_by INTEGER REFERENCES users(id)
 );
-`);
+`)
 
-function ensureColumn(table, column, definition) {
-  if (!db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-  }
+// 补列迁移：ALTER 一律使用本文件内的完整字面量，表名/列名永不来自外部输入；
+// 存在性检查经 pragma_table_info 参数绑定完成。
+function columnExists(table, column) {
+  return !!db.prepare('SELECT 1 FROM pragma_table_info(?) WHERE name=?').get(table, column)
 }
 
-const assignmentColumns = db.prepare('PRAGMA table_info(assignments)').all();
-if (!assignmentColumns.some(column => column.name === 'submission_mode')) {
-  db.exec(`ALTER TABLE assignments ADD COLUMN submission_mode TEXT NOT NULL DEFAULT 'overwrite'`);
+if (!columnExists('assignments', 'submission_mode')) {
+  db.exec("ALTER TABLE assignments ADD COLUMN submission_mode TEXT NOT NULL DEFAULT 'overwrite'")
 }
-if (!assignmentColumns.some(column => column.name === 'max_file_mb')) {
-  db.exec(`ALTER TABLE assignments ADD COLUMN max_file_mb INTEGER`);
+if (!columnExists('assignments', 'max_file_mb')) {
+  db.exec('ALTER TABLE assignments ADD COLUMN max_file_mb INTEGER')
 }
-ensureColumn('assignments', 'work_mode', "TEXT NOT NULL DEFAULT 'individual'");
-ensureColumn('courses', 'status', "TEXT NOT NULL DEFAULT 'active'");
-ensureColumn('courses', 'archived_at', 'TEXT');
-ensureColumn('courses', 'copied_from_id', 'INTEGER');
-ensureColumn('notices', 'scheduled_at', 'TEXT');
-ensureColumn('notices', 'published_at', 'TEXT');
-ensureColumn('notices', 'withdrawn_at', 'TEXT');
-ensureColumn('notices', 'withdrawn_reason', 'TEXT');
-ensureColumn('notices', 'content_revision', 'INTEGER NOT NULL DEFAULT 1');
-ensureColumn('submission_history', 'file_state', "TEXT NOT NULL DEFAULT 'available'");
-ensureColumn('submission_history', 'replaced_at', 'TEXT');
-
-const courseStudentColumns = db.prepare('PRAGMA table_info(course_students)').all();
-if (!courseStudentColumns.some(column => column.name === 'sort_order')) {
-  db.exec('ALTER TABLE course_students ADD COLUMN sort_order INTEGER');
+if (!columnExists('assignments', 'work_mode')) {
+  db.exec("ALTER TABLE assignments ADD COLUMN work_mode TEXT NOT NULL DEFAULT 'individual'")
+}
+if (!columnExists('assignments', 'allowed_extensions')) {
+  db.exec('ALTER TABLE assignments ADD COLUMN allowed_extensions TEXT')
+}
+if (!columnExists('assignments', 'require_preview_image')) {
+  db.exec('ALTER TABLE assignments ADD COLUMN require_preview_image INTEGER NOT NULL DEFAULT 0')
+}
+if (!columnExists('assignments', 'preview_max_count')) {
+  db.exec('ALTER TABLE assignments ADD COLUMN preview_max_count INTEGER NOT NULL DEFAULT 3')
+}
+// 图片/视频作业类型取消，归并为文档/文件；document 的全局白名单本就涵盖 jpg/mp4 等，历史作业行为不变。
+db.exec("UPDATE assignments SET type='document' WHERE type IN ('image','video')")
+if (!columnExists('courses', 'status')) {
+  db.exec("ALTER TABLE courses ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+}
+if (!columnExists('courses', 'archived_at')) {
+  db.exec('ALTER TABLE courses ADD COLUMN archived_at TEXT')
+}
+if (!columnExists('courses', 'copied_from_id')) {
+  db.exec('ALTER TABLE courses ADD COLUMN copied_from_id INTEGER')
+}
+if (!columnExists('notices', 'scheduled_at')) {
+  db.exec('ALTER TABLE notices ADD COLUMN scheduled_at TEXT')
+}
+if (!columnExists('notices', 'published_at')) {
+  db.exec('ALTER TABLE notices ADD COLUMN published_at TEXT')
+}
+if (!columnExists('notices', 'withdrawn_at')) {
+  db.exec('ALTER TABLE notices ADD COLUMN withdrawn_at TEXT')
+}
+if (!columnExists('notices', 'withdrawn_reason')) {
+  db.exec('ALTER TABLE notices ADD COLUMN withdrawn_reason TEXT')
+}
+if (!columnExists('notices', 'content_revision')) {
+  db.exec('ALTER TABLE notices ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 1')
+}
+if (!columnExists('submission_history', 'file_state')) {
+  db.exec("ALTER TABLE submission_history ADD COLUMN file_state TEXT NOT NULL DEFAULT 'available'")
+}
+if (!columnExists('submission_history', 'replaced_at')) {
+  db.exec('ALTER TABLE submission_history ADD COLUMN replaced_at TEXT')
+}
+if (!columnExists('course_students', 'sort_order')) {
+  db.exec('ALTER TABLE course_students ADD COLUMN sort_order INTEGER')
 }
 db.exec(`UPDATE course_students
   SET sort_order = (
     SELECT COUNT(*) FROM course_students earlier
     WHERE earlier.course_id = course_students.course_id AND earlier.id <= course_students.id
   )
-  WHERE sort_order IS NULL`);
+  WHERE sort_order IS NULL`)
 
-migrate(db);
+migrate(db)
 
-const seedUser = db.prepare(`INSERT OR IGNORE INTO users (username,password_hash,name,role,must_change_password,created_at) VALUES (?,?,?,?,?,datetime('now','+08:00'))`);
-seedUser.run('teacher', bcrypt.hashSync('123456', 10), '任课教师', 'teacher', 1);
+const seedUser = db.prepare(
+  `INSERT OR IGNORE INTO users (username,password_hash,name,role,must_change_password,created_at) VALUES (?,?,?,?,?,datetime('now','+08:00'))`,
+)
+seedUser.run('teacher', bcrypt.hashSync('123456', 10), '任课教师', 'teacher', 1)
 
-export function transaction(fn) { return db.transaction(fn); }
+export function transaction(fn) {
+  return db.transaction(fn)
+}
+// 邀请码：6 位 [0-9A-Z]，密码学随机；唯一约束兜底，碰撞时重试。
 export function randomInvite() {
-  let code;
-  do code = Math.random().toString(36).slice(2, 8).toUpperCase();
-  while (db.prepare('SELECT 1 FROM courses WHERE invite_code=?').get(code));
-  return code;
+  const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+  let code
+  do {
+    code = Array.from({ length: 6 }, () => alphabet[randomInt(alphabet.length)]).join('')
+  } while (db.prepare('SELECT 1 FROM courses WHERE invite_code=?').get(code))
+  return code
 }

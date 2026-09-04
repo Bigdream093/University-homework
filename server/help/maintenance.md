@@ -34,7 +34,7 @@ docker compose logs --tail=100 university-homework
 ```
 若面板部署：停止原项目→备份→替换完整代码/拉取更新→选择重新构建镜像→使用原挂载与环境重建项目→启动。仅“重启”不会应用新代码。不要删除数据卷，不要执行down -v。
 工程改名后服务/容器/镜像为university-homework。先用旧配置停止旧项目，再更新配置；旧容器保持停止用于回退，不要让新旧容器同时挂载同一数据库运行。NAS原数据目录无需改名；若改变项目工作目录，必须将卷挂载明确指向原数据目录的实际绝对路径。保留原.env及端口。新服务名下启动成功前不要删除旧镜像或备份。
-5. 环境至少保留不少于32字节且不是示例值的JWT_SECRET、TZ=Asia/Shanghai，以及课程资料上限MATERIAL_UPLOAD_MAX_MB=10240；卷为原data→/app/data、原uploads→/app/uploads。不能用空目录覆盖旧卷。
+5. 环境至少保留不少于32字节且不是示例值的JWT_SECRET、TZ=Asia/Shanghai、课程资料上限MATERIAL_UPLOAD_MAX_MB=10240，以及慢网络上传超时UPLOAD_REQUEST_TIMEOUT_MS=7200000；卷为原data→/app/data、原uploads→/app/uploads。不能用空目录覆盖旧卷。
 6. 打开/api/health确认ok且tz_configured为true，再从浏览器登录教师和学生账号验收：原课程原文件仍在、通知阅读计数、资料完整下载、分组提交回执、延期审批、私人问题不能被别的学生读到。
 7. 检查通知补发与计划/实际时间；进入教师帮助下载最新版手册。观察容器日志与磁盘空间。
 这是迁移升级，会新增表和字段，不清空旧数据库。具体绿联面板名称可能随系统版本不同，以“构建镜像/重建项目”的功能为准。
