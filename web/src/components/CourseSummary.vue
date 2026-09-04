@@ -243,10 +243,11 @@ function computeScores(cells) {
         : finalRaw
   return { daily: dailyRaw, final: finalRaw, total: totalRaw }
 }
+// 与服务端 round1 一致：先舍入再补足一位小数，避免 toFixed 将 2.55 显示成 2.5。
 const formatScore = (value) =>
   value === null || value === undefined || !Number.isFinite(Number(value))
     ? '—'
-    : Number(value).toFixed(1)
+    : (Math.round(Number(value) * 10) / 10).toFixed(1)
 
 async function saveConfig({ silent = false } = {}) {
   if (!weightsMatch.value) {

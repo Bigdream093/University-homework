@@ -82,6 +82,7 @@ npm start
 桌面客户端构建：
 
 ```bash
+npm ci --prefix desktop             # 首次构建先安装桌面端依赖
 npm run build:desktop:teacher        # 教师端
 npm run build:desktop:student        # 学生端（Windows）
 npm run build:desktop:student:mac    # 学生端（macOS arm64）
@@ -108,7 +109,7 @@ npm run build:desktop:student:mac    # 学生端（macOS arm64）
 | --- | --- | --- |
 | `PORT` | `3000` | 服务监听端口 |
 | `JWT_SECRET` | 无 | JWT 签名密钥，生产环境必须为至少 32 字节的非示例值，否则拒绝启动 |
-| `UPLOAD_MAX_MB` | `200` | 作业单文件上限，教师可在 100M / 200M / 500M / 1G 中设置 |
+| `UPLOAD_MAX_MB` | `1024`（Compose 配置为 `200`） | 作业单文件上限，教师可在 100M / 200M / 500M / 1G 中设置 |
 | `MATERIAL_UPLOAD_MAX_MB` | `10240` | 课程资料单文件上限（10 GB） |
 | `UPLOAD_REQUEST_TIMEOUT_MS` | `7200000` | 服务端允许的上传请求时长（2 小时） |
 | `TRUST_PROXY_HOPS` | `0` | 受信任的反向代理层数 |
@@ -129,6 +130,20 @@ npm run build:desktop:student:mac    # 学生端（macOS arm64）
 Excel 首行为表头，A 列为学号、B 列为姓名，从第二行开始读取。新学生默认密码 `123456`，已有学生账号会直接加入课程。
 
 ## 测试与验收
+
+`npm test` 运行后端测试、前端组件/工具及桌面逻辑测试、跨层集成测试。真实浏览器测试单独运行，使用实际 Vue、Element Plus、文件输入、HTTP 上传、浏览器下载和独立数据库；不会修改业务源码或连接现有业务数据库。
+
+```sh
+npm ci
+npx playwright install chromium
+npm run test:browser
+```
+
+浏览器测试覆盖个人/小组提交、预览图、教师批改、汇总行内改分、真实 Excel 下载、退回重交、断网草稿恢复和分片暂停续传。成绩舍入边界回归要求 2.55 分在页面与 Excel 中均为 2.6；源码已统一显示舍入口径。修复前的旧 1.6.0 构建存在显示差异，同版本重新构建的产物应以交付目录中的源码提交、构建记录和 SHA-256 清单区分。详见[浏览器测试说明](test/browser/README.md)及[历史测试与发布包核验报告](test/browser/AUDIT-2026-09-04.md)。
+
+Docker 构建使用根目录 `package-lock.json` 和 `npm ci` 安装对应 workspace 的依赖。
+
+其他验收命令：
 
 ```sh
 npm test

@@ -1,17 +1,21 @@
 FROM node:20-bookworm-slim AS web-builder
-WORKDIR /build/web
-COPY web/package*.json ./
-RUN npm install
-COPY web/ ./
-RUN npm run build
+WORKDIR /build
+COPY package.json package-lock.json ./
+COPY web/package.json ./web/package.json
+COPY server/package.json ./server/package.json
+RUN npm ci --workspace web --include-workspace-root=false
+COPY web/ ./web/
+RUN npm run build --workspace web
 
 FROM node:20-bookworm-slim AS server-deps
 WORKDIR /deps
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
-COPY server/package*.json ./
-RUN npm install --omit=dev
+COPY package.json package-lock.json ./
+COPY web/package.json ./web/package.json
+COPY server/package.json ./server/package.json
+RUN npm ci --workspace server --include-workspace-root=false --omit=dev
 
 FROM node:20-bookworm-slim
 WORKDIR /app

@@ -17,9 +17,11 @@
     "test": "npm run test -w server && npm run test:frontend && npm run test:integration",
     "test:frontend": "npm run test -w web",
     "verify": "npm run build -w web && npm run build --prefix desktop",
-    "test:integration": "node --test test/integration/*.test.js"
+    "test:integration": "node --test test/integration/*.test.js",
+    "test:browser": "npm run build && playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "concurrently": "^9.2.1"
   }
 }

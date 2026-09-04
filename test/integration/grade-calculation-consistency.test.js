@@ -62,6 +62,16 @@ const assignments = [
 
 const cases = [
   {
+    name: '半分舍入边界：平时、期末和总分均与导出一致',
+    expected: [2.6, 2.6, 2.6], // 两项平时及期末均折算为2.55；总分2.55。
+    config: { daily_ratio: 40, final_ratio: 60, grade_absent_mode: 'zero' },
+    cells: {
+      1: { status: 'graded', score: 2.55 },
+      2: { status: 'graded', score: 1.275 },
+      3: { status: 'graded', score: 2.04 },
+    },
+  },
+  {
     name: '全部评分',
     expected: [65, 80, 74], // (80+50)/2=65；65×40%+80×60%=74
     config: { daily_ratio: 40, final_ratio: 60, grade_absent_mode: 'zero' },
