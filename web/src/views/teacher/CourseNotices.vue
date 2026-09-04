@@ -154,7 +154,9 @@ useRefresh(load)
               @click="move(notice, 'down')"
               >下移</el-button
             ></el-button-group
-          ><span class="card-chevron">{{ noticeCard.isOpen(notice.id) ? '收起 ▲' : '展开 ▼' }}</span>
+          ><span class="card-chevron">{{
+            noticeCard.isOpen(notice.id) ? '收起 ▲' : '展开 ▼'
+          }}</span>
         </div>
         <div v-if="noticeCard.isOpen(notice.id)" class="card-body">
           <p
@@ -185,10 +187,9 @@ useRefresh(load)
             >
           </div>
           <span class="hint" style="display: block; margin-top: 12px"
-            >计划 {{ notice.scheduled_at || '—' }} · 实际发布
-            {{ notice.published_at || '—' }} · 修改 {{ notice.updated_at }} · 撤回
-            {{ notice.withdrawn_at || '—' }} · 已读 {{ notice.read_count || 0 }} 人 · 修订
-            {{ notice.content_revision }}</span
+            >计划 {{ notice.scheduled_at || '—' }} · 实际发布 {{ notice.published_at || '—' }} ·
+            修改 {{ notice.updated_at }} · 撤回 {{ notice.withdrawn_at || '—' }} · 已读
+            {{ notice.read_count || 0 }} 人 · 修订 {{ notice.content_revision }}</span
           >
         </div>
       </article>
@@ -239,7 +240,10 @@ useRefresh(load)
           class="assignment-card"
         >
           <b>版本{{ revision.revision }} · {{ revision.changed_at }} · {{ revision.title }}</b>
-          <p style="white-space: pre-wrap" v-html="linkify(revision.content)"></p></article></template
+          <p
+            style="white-space: pre-wrap"
+            v-html="linkify(revision.content)"
+          ></p></article></template
     ></el-dialog>
   </div>
 </template>

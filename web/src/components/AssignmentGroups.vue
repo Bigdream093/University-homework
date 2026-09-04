@@ -66,9 +66,7 @@ async function submitter(group) {
         students
           .filter(
             (student) =>
-              !snapshots.some((group) =>
-                group.members.some((member) => member.id === student.id),
-              ),
+              !snapshots.some((group) => group.members.some((member) => member.id === student.id)),
           )
           .map((student) => student.name + '（' + student.username + '）')
           .join('、') || '无'
@@ -78,9 +76,7 @@ async function submitter(group) {
     <article v-for="group in snapshots" :key="group.id" class="assignment-card">
       <b>{{ group.name }}</b>
       <p>
-        {{
-          group.members.map((member) => member.name + '（' + member.username + '）').join('、')
-        }}
+        {{ group.members.map((member) => member.name + '（' + member.username + '）').join('、') }}
       </p>
       <el-select v-model="group.submitter_id" :disabled="readonly" @change="submitter(group)"
         ><el-option

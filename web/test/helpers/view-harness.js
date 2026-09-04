@@ -6,7 +6,7 @@ import { parse, compileScript } from 'vue/compiler-sfc'
 import api, { messageOf } from '../../src/api/request.js'
 
 const renderer = Vue.createRenderer({
-  createElement: (tag) => ({ tag, props: {}, children: [] }),
+  createElement: (tag) => ({ tag, props: {}, style: {}, children: [] }),
   createText: (text) => ({ text }),
   createComment: (text) => ({ text }),
   setText: (node, text) => { node.text = text },
@@ -54,7 +54,7 @@ export function storage() {
   return { getItem: k => data.get(k) ?? null, setItem: (k,v) => data.set(k,String(v)), removeItem: k => data.delete(k), clear: () => data.clear(), values: () => [...data.values()] }
 }
 function stub(tag) {
-  return { inheritAttrs: false, setup: (_, { attrs, slots }) => () => Vue.h(tag, attrs, [slots.default?.(), slots.footer?.()]) }
+  return { inheritAttrs: false, setup: (_, { attrs, slots }) => () => Vue.h(tag, { ...attrs, ...('model-value' in attrs ? { modelValue: attrs['model-value'] } : {}) }, [slots.default?.(), slots.footer?.()]) }
 }
 export async function mountView(relative, { props = {}, route = { params: { id: '1' } }, handler, dependencies = {}, resetStorage = true, confirm = async () => {} } = {}) {
   const messages = [], requests = [], errors = [], navigations = [], downloads = []
@@ -76,37 +76,63 @@ export async function mountView(relative, { props = {}, route = { params: { id: 
   }
   const filename = new URL('../../src/' + relative, import.meta.url)
   const source = readFileSync(filename,'utf8')
-  const { descriptor } = parse(source)
   const deps = {
     vue: Vue,
     'vue-router': { useRoute: () => Vue.reactive(route), useRouter: () => ({ push: target => navigations.push(target) }) },
     'element-plus': { ElMessage: Object.fromEntries(['success','warning','error','info'].map(level => [level, text => messages.push({level,text})])), ElMessageBox: { confirm } },
     ...dependencies,
   }
-  for (const [,specifier] of descriptor.scriptSetup.content.matchAll(/from\s+['"]([^'"]+)['"]/g)) {
-    if (specifier in deps) continue
-    if (specifier.endsWith('.vue')) deps[specifier] = { default: stub(specifier.split('/').at(-1).replace('.vue','')) }
-    else if (specifier.endsWith('/utils/files.js')) deps[specifier] = { downloadBlob: (...args) => downloads.push(args) }
-    else if (specifier.endsWith('/useDownload.js')) deps[specifier] = { useDownload: () => ({ tasks: Vue.ref([]), start: async () => {} }) }
-    else deps[specifier] = await import(new URL(specifier,filename))
+  // Compile extracted feature components and composables with the same host mocks.
+  // Existing unrelated widgets stay stubbed so these remain focused interaction tests.
+  const features = /^(CourseAssignmentForm|CourseAssignmentsPanel|CourseStudentsPanel|CourseGradeTable|CourseGradeSettings|SubmissionTable|SubmissionGradeDialog)\.vue$/
+  const modules = /^(useCourseSummary|useGradeSettings|useSummaryPreviews|useSummaryWorkspace|useSubmissions|useSubmissionDownloads)\.js$/
+  const sources = [source]
+  const cache = new Map()
+  async function compileFile(url, isVue) {
+    if (cache.has(url.href)) return cache.get(url.href)
+    const text = readFileSync(url, 'utf8')
+    let code = text
+    let exports = []
+    if (isVue) {
+      sources.push(text)
+      const parsed = parse(text).descriptor
+      code = compileScript(parsed, { id: url.href, inlineTemplate: true, genDefaultAs: 'component' }).content
+    } else {
+      exports = [...code.matchAll(/export (?:async )?function (\w+)/g)].map(match => match[1])
+      code = code.replace(/export (?=(?:async )?function)/g, '')
+    }
+    const localDeps = { ...deps }
+    for (const [, specifier] of code.matchAll(/from\s+['"]([^'"]+)['"]/g)) {
+      if (specifier in localDeps) continue
+      const name = specifier.split('/').at(-1)
+      if (specifier.endsWith('.vue')) localDeps[specifier] = features.test(name)
+        ? { default: await compileFile(new URL(specifier, url), true) }
+        : { default: stub(name.replace('.vue', '')) }
+      else if (specifier.endsWith('/utils/files.js')) localDeps[specifier] = { downloadBlob: (...args) => downloads.push(args) }
+      else if (specifier.endsWith('/useDownload.js')) localDeps[specifier] = { useDownload: () => ({ tasks: Vue.ref([]), start: async () => {} }) }
+      else if (modules.test(name)) localDeps[specifier] = await compileFile(new URL(specifier, url), false)
+      else localDeps[specifier] = await import(new URL(specifier, url))
+    }
+    const executable = code.replace(/import\s+([\s\S]*?)\s+from\s+['"]([^'"]+)['"];?/g, (_,bindings,specifier) => {
+      assert.ok(specifier in localDeps, 'Missing dependency ' + specifier)
+      const namedStart=bindings.indexOf('{'), declarations=[]
+      if(namedStart!==0) declarations.push('const '+bindings.split(',')[0].trim()+' = deps['+JSON.stringify(specifier)+'].default')
+      if(namedStart>=0) declarations.push('const '+bindings.slice(namedStart).replace(/\bas\b/g, ':')+' = deps['+JSON.stringify(specifier)+']')
+      return declarations.join(';\n')+';'
+    })
+    const result = new Function('deps', executable + '\nreturn ' + (isVue ? 'component' : '{' + exports.join(',') + '}'))(localDeps)
+    cache.set(url.href, result)
+    return result
   }
-  const compiled = compileScript(descriptor,{ id: relative, inlineTemplate:true, genDefaultAs:'component' }).content
-  const executable = compiled.replace(/import\s+([\s\S]*?)\s+from\s+['"]([^'"]+)['"];?/g, (_,bindings,specifier) => {
-    assert.ok(specifier in deps, 'Missing dependency ' + specifier)
-    const namedStart=bindings.indexOf('{'), declarations=[]
-    if(namedStart!==0) declarations.push('const '+bindings.split(',')[0].trim()+' = deps['+JSON.stringify(specifier)+'].default')
-    if(namedStart>=0) declarations.push('const '+bindings.slice(namedStart).replace(/\bas\b/g, ':')+' = deps['+JSON.stringify(specifier)+']')
-    return declarations.join(';\n')+';'
-  })
-  const component = new Function('deps',executable+'\nreturn component')(deps)
+  const component = await compileFile(filename, true)
   const app=renderer.createApp(component,props)
   app.config.errorHandler = error => errors.push(error)
   app.config.warnHandler = () => {}
   app.directive('loading', {})
-  for(const tag of new Set(source.match(/el-[a-z-]+/g) || []))
+  for(const tag of new Set(sources.join('\n').match(/el-[a-z-]+/g) || []))
     if (!['el-dialog','el-table','el-table-column'].includes(tag)) app.component(tag,stub(tag))
   app.component('router-link',stub('router-link'))
-  app.component('el-dialog',{ inheritAttrs:false, setup:(_, {attrs,slots}) => () => attrs.modelValue ? Vue.h('el-dialog',attrs,[slots.default?.(),slots.footer?.()]) : null })
+  app.component('el-dialog',{ inheritAttrs:false, setup:(_, {attrs,slots}) => () => (attrs.modelValue ?? attrs['model-value']) ? Vue.h('el-dialog',attrs,[slots.default?.(),slots.footer?.()]) : null })
   app.component('el-table',{
     inheritAttrs:false,
     setup:(_, {attrs,slots}) => {

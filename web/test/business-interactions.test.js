@@ -249,3 +249,36 @@ for (const [name,path,props] of [
   assert.ok(view.messages.some(m=>m.level==='error'&&m.text==='加载失败'))
   assert.deepEqual(view.errors,[])
 })
+
+
+test('课程页：提取后的作业表单新建、校验后缀并清空再次打开的草稿', async () => {
+  const view = await mountView('views/teacher/CourseManage.vue', {
+    dependencies: { '../../composables/useDraggableTabs.js': { useDraggableTabs: () => {} } },
+    handler: async (config, body) => {
+      if (config.method === 'post' && config.url === '/courses/1/assignments') return {id: 2, ...body}
+      if (config.url === '/courses/1') return {id:1,name:'设计课',status:'active'}
+      if (config.url.endsWith('/students') || config.url.endsWith('/assignments')) return []
+      throw Error('Unexpected request ' + config.url)
+    },
+  })
+  await click(button(view, '发布新作业'))
+  const fields = nodes(view.root, 'el-input')
+  await input(fields[0], '新作业')
+  await input(fields[2], '.ZIP；dwg')
+  await click(button(view, '保存'))
+  const created = view.requests.find(r => r.method === 'post')
+  assert.equal(created.body.title, '新作业')
+  assert.equal(created.body.allowed_extensions, 'zip,dwg')
+  await click(button(view, '发布新作业'))
+  assert.equal(nodes(view.root, 'el-input')[0].props.modelValue, '')
+})
+
+test('批改页：放弃草稿恢复服务端成绩并删除缓存', async () => {
+  const view = await grading()
+  await click(button(view, '评分'))
+  await input(nodes(view.root, 'el-input-number')[0], 75)
+  assert.ok(sessionStorage.values().some(value => value.includes('75')))
+  await click(button(view, '放弃草稿'))
+  assert.equal(nodes(view.root, 'el-input-number')[0].props.modelValue, null)
+  assert.equal(sessionStorage.values().length, 0)
+})

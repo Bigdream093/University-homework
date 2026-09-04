@@ -131,11 +131,7 @@ useRefresh(load)
 <template>
   <div>
     <div class="toolbar">
-      <el-button
-        type="primary"
-        color="#15554e"
-        :disabled="readonly"
-        @click="openMaterialDialog()"
+      <el-button type="primary" color="#15554e" :disabled="readonly" @click="openMaterialDialog()"
         >上传资料</el-button
       >
       <span class="hint">支持文档、图片、视频、设计源文件和压缩包，单文件最多10GB</span>
@@ -151,12 +147,7 @@ useRefresh(load)
       <el-table-column label="操作" width="250">
         <template #default="{ row }">
           <el-button link @click="showReaders(row)">查看下载记录</el-button
-          ><el-button
-            link
-            type="primary"
-            @click="downloadMaterial(row)"
-            >下载</el-button
-          >
+          ><el-button link type="primary" @click="downloadMaterial(row)">下载</el-button>
           <el-button link :disabled="readonly" @click="openMaterialDialog(row)">编辑</el-button>
           <el-button link type="danger" :disabled="readonly" @click="removeMaterial(row)"
             >删除</el-button

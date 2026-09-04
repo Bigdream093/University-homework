@@ -52,3 +52,18 @@ docker compose exec university-homework node scripts/storage-audit.mjs --report
 需要隔离超过24小时的无引用文件时使用 `--quarantine`，它不直接删除文件。核对隔离记录并确认备份后，才可使用 `--purge-after-30-days` 删除已隔离至少30天的文件。不要在仍有上传或课程复制操作时进行手工隔离维护。
 
 桌面端保持现有下载桥接参数，帮助入口与网页相同。桌面端打印未提供专门支持，界面会提示在浏览器打开网站后打印；手册下载不受影响。
+
+
+## CSP 强制模式更新
+
+应用和 Compose 默认启用 enforce。升级前检查现有 `.env`；如果有 `CSP_MODE=report-only`，改为 `CSP_MODE=enforce`，然后按上面的备份、构建和重建流程更新。不能只重启旧容器。
+
+上线后从实际访问地址检查登录页响应头：
+
+```sh
+curl -sS -D - -o /dev/null http://NAS地址:34567/login
+```
+
+必须出现 `Content-Security-Policy`，其中包含 `script-src 'self' 'wasm-unsafe-eval'`；不能仅有 `Content-Security-Policy-Report-Only`。如存在反向代理，应从用户最终访问的域名检查，避免只验收容器内响应。
+
+这项检查是 CSP 强制执行验证，不是外部机构的安全认证。GitHub Release validation 会运行真实浏览器脚本拦截和 WebAssembly 兼容检查，但推送仓库本身不会更新 NAS 容器。

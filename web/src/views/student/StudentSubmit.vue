@@ -278,6 +278,7 @@ async function submit() {
     await load()
   } catch (error) {
     if (['UPLOAD_PAUSED', 'UPLOAD_CANCELLED'].includes(error.code)) {
+      // Upload controls already display pause/cancellation state.
     } else if (isSubmissionConflict(error)) conflict.value = true
     else ElMessage.error(messageOf(error))
   } finally {

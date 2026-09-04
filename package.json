@@ -1,7 +1,7 @@
 {
   "name": "university-homework",
   "private": true,
-  "version": "1.6.0",
+  "version": "1.6.5",
   "workspaces": [
     "server",
     "web"
@@ -14,14 +14,17 @@
     "build:desktop:student": "npm run build:student --prefix desktop",
     "build:desktop:student:mac": "npm run build:student:mac --prefix desktop",
     "start": "npm run start -w server",
-    "test": "npm run test -w server && npm run test:frontend && npm run test:integration",
-    "test:frontend": "npm run test -w web",
+    "test": "npm run test -w server && npm run test:frontend",
+    "test:frontend": "npm run lint -w web && npm run format:check -w web && npm run test -w web",
     "verify": "npm run build -w web && npm run build --prefix desktop",
-    "test:integration": "node --test test/integration/*.test.js",
-    "test:browser": "npm run build && playwright test"
+    "test:browser": "npm run build && playwright test",
+    "check:runtime": "node scripts/check-runtime.cjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "concurrently": "^9.2.1"
+  },
+  "engines": {
+    "node": "24.x"
   }
 }

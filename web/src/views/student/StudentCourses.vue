@@ -51,7 +51,9 @@ useRefresh(load)
         class="course-card"
         @click="router.push(`/student/courses/${course.id}`)"
       >
-        <span class="badge">{{ course.status === 'archived' ? '已归档' : course.code || '课程' }}</span
+        <span class="badge">{{
+          course.status === 'archived' ? '已归档' : course.code || '课程'
+        }}</span
         ><span
           v-if="course.unread_notice_count"
           class="badge"

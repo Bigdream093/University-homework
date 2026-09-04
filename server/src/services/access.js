@@ -3,6 +3,11 @@ import { db } from '../db.js'
 export function fail(status, message) {
   throw Object.assign(new Error(message), { status })
 }
+// 服务也校验角色，避免非 HTTP 调用绕过路由中间件。
+export function requireRole(user, role) {
+  if (user?.role !== role)
+    fail(403, role === 'teacher' ? '仅教师可执行此操作' : '仅学生可执行此操作')
+}
 export function textValue(value, label, max = 20000, required = true) {
   const text = String(value ?? '').trim()
   if ((required && !text) || text.length > max)

@@ -1,0 +1,21 @@
+{
+  "baselineViteKB": {
+    "js": 1086.31,
+    "css": 368.14,
+    "jsGzip": 359.99,
+    "cssGzip": 50.2
+  },
+  "afterInitialAssets": [
+    {
+      "file": "/assets/index-bR2gYjVc.js",
+      "bytes": 305321,
+      "gzipBytes": 112407
+    },
+    {
+      "file": "/assets/index-CYNtGePn.css",
+      "bytes": 57278,
+      "gzipBytes": 9150
+    }
+  ],
+  "note": "Production entry assets only; no same-condition browser timing comparison."
+}

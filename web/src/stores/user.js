@@ -6,7 +6,7 @@ export const useUserStore = defineStore('user', {
   state: () => ({ token: readToken(), user: readUser() }),
   actions: {
     async login(form) {
-      const { data } = await api.post('/auth/login', form)
+      const { data } = await api.post('/auth/login', form, { skipSessionExpiry: true })
       this.token = data.token
       this.user = data.user
       saveSession(data.token, data.user)

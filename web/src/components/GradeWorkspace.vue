@@ -82,13 +82,7 @@ function discardDraft() {
   if (props.row) sessionStorage.removeItem(draftKey())
   openRow(props.row)
 }
-function goto(row) {
-  if (!row) {
-    visible.value = false
-    return
-  }
-  emit('saved', row) // 让父组件同步当前行数据
-}
+
 async function persist(kind) {
   if (kind === 'grade') {
     const score = Number(form.score)
@@ -124,9 +118,7 @@ async function saveAndNext() {
   const list = props.rows.filter((row) => row.id)
   const position = list.findIndex((row) => row.api_base === props.row.api_base)
   const next =
-    list.slice(position + 1).find((row) => row.status === 'submitted') ||
-    list[position + 1] ||
-    null
+    list.slice(position + 1).find((row) => row.status === 'submitted') || list[position + 1] || null
   emit('saved', props.row)
   if (next) emit('saved', next, true)
   else visible.value = false

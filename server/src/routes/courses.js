@@ -7,7 +7,8 @@ import { teacherOnly, studentOnly } from '../middleware/teacher.js'
 import { importStudents } from '../services/importStudents.js'
 import { deleteCourse } from '../services/deletionService.js'
 import { courseAccess, fail } from '../services/access.js'
-import { nowText } from '../utils/time.js'
+import { listCourseStudents } from '../services/studentQueries.js'
+import { archiveCourse } from '../services/courseService.js'
 import { asyncRoute } from '../middleware/error.js'
 import { clientAddress, createFailureLimiter, rejectLimited } from '../services/attemptLimiter.js'
 import { removalImpact, removeStudent } from '../services/studentRemovalService.js'
@@ -57,23 +58,9 @@ router.get('/courses', auth, teacherOnly, (req, res) => {
   )
 })
 
-router.post('/courses/:id/archive', auth, teacherOnly, (req, res) => {
-  const course = courseAccess(req.params.id, req.user)
-  if (course.status !== 'active') fail(409, '课程已归档，无需重复操作')
-  db.transaction(() => {
-    db.prepare("UPDATE courses SET status='archived',archived_at=? WHERE id=?").run(
-      nowText(),
-      course.id,
-    )
-    db.prepare(
-      "UPDATE extension_requests SET status='cancelled',decision_reason='课程归档',decided_at=? WHERE status='pending' AND assignment_id IN (SELECT id FROM assignments WHERE course_id=?)",
-    ).run(nowText(), course.id)
-    db.prepare(
-      "UPDATE notices SET status='draft',scheduled_at=NULL,updated_at=? WHERE course_id=? AND status='scheduled'",
-    ).run(nowText(), course.id)
-  })()
-  res.json({ message: '课程已归档' })
-})
+router.post('/courses/:id/archive', auth, teacherOnly, (req, res) =>
+  res.json(archiveCourse(req.params.id, req.user)),
+)
 router.post('/courses/:id/restore', auth, teacherOnly, (req, res) => {
   const course = db
     .prepare('SELECT * FROM courses WHERE id=? AND teacher_id=?')
@@ -145,20 +132,9 @@ router.post(
   }),
 )
 
-router.get('/courses/:id/students', auth, teacherOnly, (req, res) => {
-  if (!courseAccess(req.params.id, req.user)) return res.status(404).json({ message: '课程不存在' })
-  res.json(
-    db
-      .prepare(
-        `SELECT u.id,u.username,u.name,u.status,cs.joined_at,
-    ((SELECT count(*) FROM submissions s JOIN assignments a ON a.id=s.assignment_id WHERE a.course_id=cs.course_id AND s.student_id=u.id)
-    +(SELECT count(*) FROM group_submissions gs JOIN assignment_groups ag ON ag.id=gs.assignment_group_id JOIN assignments a ON a.id=ag.assignment_id JOIN assignment_group_members gm ON gm.assignment_group_id=ag.id WHERE a.course_id=cs.course_id AND gm.student_id=u.id)) submission_count
-    FROM course_students cs JOIN users u ON u.id=cs.student_id WHERE cs.course_id=?
-    ORDER BY COALESCE(cs.sort_order, cs.id), cs.id`,
-      )
-      .all(req.params.id),
-  )
-})
+router.get('/courses/:id/students', auth, teacherOnly, (req, res) =>
+  res.json(listCourseStudents(req.params.id, req.user)),
+)
 
 router.post('/courses/:id/students', auth, teacherOnly, (req, res) => {
   if (!ownCourse(req.params.id, req.user.id)) return res.status(404).json({ message: '课程不存在' })

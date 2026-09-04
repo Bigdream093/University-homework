@@ -36,7 +36,7 @@
 
 | 端 | 技术 |
 | --- | --- |
-| 服务端 [`server/`](server/) | Node.js 20+、Express 5、better-sqlite3、Multer、ExcelJS、Sharp、bcryptjs、JWT |
+| 服务端 [`server/`](server/) | Node.js 24 LTS、Express 5、better-sqlite3、Multer、ExcelJS、Sharp、bcryptjs、JWT |
 | Web 前端 [`web/`](web/) | Vue 3、Vite、Element Plus、Pinia、Vue Router、Axios、hash-wasm |
 | 桌面端 [`desktop/`](desktop/) | Electron + electron-builder（教师端 / 学生端，Windows & macOS arm64） |
 | 部署 | Docker Compose、绿联 NAS 离线包 |
@@ -56,10 +56,12 @@ university-homework/
 
 ## 本地开发
 
-需要 Node.js 20 或更高版本。
+需要 Node.js 24.x（LTS），本地开发、测试与 Docker 构建统一使用这一主版本；版本文件见 `.nvmrc`。
+
+切换 Node 主版本或更换操作系统／CPU 架构后，请在目标环境重新运行 `npm ci`，不要复制其他环境的 `node_modules`。`better-sqlite3` 是原生模块；若出现 `NODE_MODULE_VERSION` 不匹配，确认 `node -v` 为 24.x 后重新安装依赖，也可用 `npm rebuild better-sqlite3` 修复现有安装。安装完成后运行 `npm run check:runtime` 检查数据库模块能否加载。
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
@@ -112,6 +114,7 @@ npm run build:desktop:student:mac    # 学生端（macOS arm64）
 | `UPLOAD_MAX_MB` | `1024`（Compose 配置为 `200`） | 作业单文件上限，教师可在 100M / 200M / 500M / 1G 中设置 |
 | `MATERIAL_UPLOAD_MAX_MB` | `10240` | 课程资料单文件上限（10 GB） |
 | `UPLOAD_REQUEST_TIMEOUT_MS` | `7200000` | 服务端允许的上传请求时长（2 小时） |
+| `CSP_MODE` | `enforce` | CSP 强制执行；排查资源拦截时可暂设 `report-only`，排查完成后恢复 |
 | `TRUST_PROXY_HOPS` | `0` | 受信任的反向代理层数 |
 | `DATA_DIR` | `./data` | 数据库目录（Docker 内为 `/app/data`） |
 | `UPLOAD_DIR` | `./uploads` | 附件目录（Docker 内为 `/app/uploads`） |
@@ -131,7 +134,7 @@ Excel 首行为表头，A 列为学号、B 列为姓名，从第二行开始读�
 
 ## 测试与验收
 
-`npm test` 运行后端测试、前端组件/工具及桌面逻辑测试、跨层集成测试。真实浏览器测试单独运行，使用实际 Vue、Element Plus、文件输入、HTTP 上传、浏览器下载和独立数据库；不会修改业务源码或连接现有业务数据库。
+`npm test` 运行后端测试、前端静态检查、组件/工具及桌面逻辑测试。真实浏览器测试单独运行，使用实际 Vue、Element Plus、文件输入、HTTP 上传、浏览器下载和独立数据库；不会修改业务源码或连接现有业务数据库。
 
 ```sh
 npm ci
@@ -142,6 +145,8 @@ npm run test:browser
 浏览器测试覆盖个人/小组提交、预览图、教师批改、汇总行内改分、真实 Excel 下载、退回重交、断网草稿恢复和分片暂停续传。成绩舍入边界回归要求 2.55 分在页面与 Excel 中均为 2.6；源码已统一显示舍入口径。修复前的旧 1.6.0 构建存在显示差异，同版本重新构建的产物应以交付目录中的源码提交、构建记录和 SHA-256 清单区分。详见[浏览器测试说明](test/browser/README.md)及[历史测试与发布包核验报告](test/browser/AUDIT-2026-09-04.md)。
 
 Docker 构建使用根目录 `package-lock.json` 和 `npm ci` 安装对应 workspace 的依赖。
+
+日常 `npm test` 运行服务端测试及前端静态检查、单元/组件测试；发布验收另运行 `npm run test:browser`。重复的中间层流程已移除：分片协议、完成幂等及资料文件关联由服务端测试负责，客户端响应丢失和暂停取消由前端分片测试负责，真实跨 8 MB 续传保留在浏览器层。详见[测试覆盖分工](docs/test-coverage.md)。
 
 其他验收命令：
 
@@ -170,3 +175,9 @@ node server/scripts/verify-existing-migration.mjs server/data/homework.sqlite
 
 - 部署与维护：[`server/help/maintenance.md`](server/help/maintenance.md)
 - 各功能使用说明：见 [`server/help/`](server/help/)（也可在应用内“帮助”页面查看）
+
+### CSP 强制执行验收
+
+应用及 Compose 默认启用 `CSP_MODE=enforce`。更新已有部署时，如旧 `.env` 显式设置了 `CSP_MODE=report-only`，应改为 `enforce` 后重建容器。登录页响应必须包含 `Content-Security-Policy`，不能仅有 `Content-Security-Policy-Report-Only`。强制模式限制行内脚本与外部脚本，不等同于第三方安全认证。
+
+GitHub 的 Release validation 工作流运行全量测试、强制 CSP 浏览器验收及 Docker 构建。推送不会自动更新 NAS；NAS 更新和备份步骤见维护手册。

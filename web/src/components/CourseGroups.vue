@@ -23,9 +23,7 @@ async function load() {
 const ungrouped = computed(() =>
   students.value.filter(
     (student) =>
-      !groups.value.some((group) =>
-        group.members.some((member) => member.id === student.id),
-      ),
+      !groups.value.some((group) => group.members.some((member) => member.id === student.id)),
   ),
 )
 function open(group) {
@@ -98,8 +96,7 @@ useRefresh(load)
           :data="
             [...group.members].sort(
               (left, right) =>
-                (left.id === group.leader_id ? -1 : 0) -
-                  (right.id === group.leader_id ? -1 : 0) ||
+                (left.id === group.leader_id ? -1 : 0) - (right.id === group.leader_id ? -1 : 0) ||
                 (left.username < right.username ? -1 : 1),
             )
           "

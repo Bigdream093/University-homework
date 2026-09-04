@@ -20,8 +20,8 @@ api.interceptors.response.use(
         // Keep the original Blob when the server did not return JSON.
       }
     }
-    const isLoginRequest = String(error.config?.url || '').replace(/^\/api/, '') === '/auth/login'
-    if (error.response?.status === 401 && !isLoginRequest) {
+    const skipSessionExpiry = error.config?.skipSessionExpiry === true
+    if (error.response?.status === 401 && !skipSessionExpiry) {
       clearSession()
       if (!redirectingToLogin && location.pathname !== '/login') {
         redirectingToLogin = true

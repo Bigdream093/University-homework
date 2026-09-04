@@ -35,15 +35,19 @@ import { acquireInstanceLease } from './services/instanceLease.js'
 import { purgeUploadSessions, recoverUploadSessions } from './services/uploadSessionService.js'
 import { errorHandler } from './middleware/error.js'
 
+import { cspHeaders, reportCspViolation } from './middleware/csp.js'
+
 export const app = express()
 app.disable('x-powered-by')
 if (config.trustProxyHops > 0) app.set('trust proxy', config.trustProxyHops)
+app.use(cspHeaders())
 app.use(cors())
+app.post('/api/security/csp-report', express.json({ type: 'application/csp-report', limit: '8kb' }), reportCspViolation)
 app.use(express.json({ limit: '2mb' }))
 const tzOk = process.env.TZ === 'Asia/Shanghai'
 if (!tzOk && process.env.NODE_ENV !== 'test') console.warn('建议设置 TZ=Asia/Shanghai')
 app.get('/api/health', (_req, res) =>
-  res.json({ ok: true, version: '1.6.0', timezone: 'Asia/Shanghai', tz_configured: tzOk }),
+  res.json({ ok: true, version: '1.6.5', timezone: 'Asia/Shanghai', tz_configured: tzOk }),
 )
 app.use('/api/auth', authRoutes)
 app.use(

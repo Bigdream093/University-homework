@@ -47,9 +47,8 @@ function download(url, name, kind, extra = {}) {
       <b>{{ receipt.receipt_no }}</b>
       <p>{{ receipt.snapshot.course_name }} / {{ receipt.snapshot.assignment_title }}</p>
       <p>
-        实际提交人：{{ receipt.snapshot.student?.name }}（{{
-          receipt.snapshot.student?.username
-        }}） · 第{{ receipt.snapshot.submit_count }}次 ·
+        实际提交人：{{ receipt.snapshot.student?.name }}（{{ receipt.snapshot.student?.username }}）
+        · 第{{ receipt.snapshot.submit_count }}次 ·
         {{ receipt.snapshot.is_late ? '迟交' : '准时' }}
       </p>
       <p>

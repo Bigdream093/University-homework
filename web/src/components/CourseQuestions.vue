@@ -216,11 +216,7 @@ useRefresh(load)
       ><el-button @click="searchFromFirstPage">搜索</el-button>
     </div>
     <template v-if="tab === 'public'">
-      <article
-        v-for="(row, index) in rows"
-        :key="row.id"
-        class="assignment-card collapsible-card"
-      >
+      <article v-for="(row, index) in rows" :key="row.id" class="assignment-card collapsible-card">
         <div class="card-head" @click="publicCard.toggle(row.id)">
           <span v-if="row.pinned" class="badge" style="background: #e6a23c">置顶</span>
           <b class="card-title">{{ row.summary }}</b>
@@ -326,7 +322,11 @@ useRefresh(load)
             ></template
           >
         </div>
-        <article v-for="replyRecord in detail.replies" :key="replyRecord.id" class="assignment-card">
+        <article
+          v-for="replyRecord in detail.replies"
+          :key="replyRecord.id"
+          class="assignment-card"
+        >
           <b>{{ replyRecord.author_name }} · {{ replyRecord.created_at }}</b>
           <p style="white-space: pre-wrap">{{ replyRecord.content }}</p>
         </article>

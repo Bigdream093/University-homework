@@ -16,4 +16,5 @@ services:
       MATERIAL_UPLOAD_MAX_MB: 10240
       UPLOAD_REQUEST_TIMEOUT_MS: 7200000
       TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
+      CSP_MODE: ${CSP_MODE:-enforce}
       TZ: Asia/Shanghai

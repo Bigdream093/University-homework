@@ -51,9 +51,7 @@ async function archive(course) {
         : '确认恢复课程？',
       '确认',
     )
-    await api.post(
-      '/courses/' + course.id + (course.status === 'active' ? '/archive' : '/restore'),
-    )
+    await api.post('/courses/' + course.id + (course.status === 'active' ? '/archive' : '/restore'))
     await load()
   } catch (error) {
     if (error !== 'cancel') ElMessage.error(messageOf(error))
