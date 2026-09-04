@@ -8,11 +8,9 @@ COPY web/ ./web/
 COPY server/src/domain/ ./server/src/domain/
 RUN npm run build --workspace web
 
-FROM node:24-bookworm-slim AS server-deps
+FROM node:24-bookworm AS server-deps
 WORKDIR /deps
-RUN apt-get -o Acquire::Retries=3 update \
-    && apt-get -o Acquire::Retries=3 install -y --no-install-recommends python3 make g++ \
-    && rm -rf /var/lib/apt/lists/*
+RUN command -v python3 && command -v make && command -v g++
 COPY package.json package-lock.json ./
 COPY web/package.json ./web/package.json
 COPY server/package.json ./server/package.json
