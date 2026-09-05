@@ -26,4 +26,5 @@ nsis:
   createStartMenuShortcut: true
   shortcutName: 墨痕教师端
   uninstallDisplayName: 墨痕教师端
+# Platform publish URLs and updateBaseUrl are injected by electron-builder.teacher.cjs.
 publish: null

@@ -92,6 +92,8 @@ npm run build:desktop:student:mac    # 学生端（macOS arm64）
 
 安装桌面端后填写 NAS/服务器地址即可使用。
 
+桌面端更新仅由“帮助 → 检查更新”触发，启动和运行期间不自动检查。Windows 下载后可选择“重启并更新”，Mac 学生端下载 DMG 后手动替换。构建前需填写独立更新地址，详见 [桌面更新配置与发布](desktop/UPDATES.md)。
+
 ## Docker / 绿联 NAS 部署
 
 1. 复制 `.env.example` 为 `.env`，把 `JWT_SECRET` 改为至少 32 字节的随机字符串。生产环境漏配、过短或仍使用示例值时服务会拒绝启动。

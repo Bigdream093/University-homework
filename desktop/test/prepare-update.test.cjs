@@ -1,0 +1,37 @@
+const { test } = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
+const crypto = require('node:crypto')
+const YAML = require('yaml')
+const { prepareUpdate } = require('../scripts/prepare-update.cjs')
+
+test('release preparation verifies Windows hashes and role; stages DMG JSON independently', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mohen-update-test-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version: '1.6.6' }))
+  const source = path.join(root, 'release', 'student')
+  fs.mkdirSync(source, { recursive: true })
+  const file = '墨痕学生端-Setup-1.6.6.exe'
+  const bytes = Buffer.from('test installer')
+  fs.writeFileSync(path.join(source, file), bytes)
+  fs.writeFileSync(path.join(source, `${file}.blockmap`), 'test blockmap')
+  const entry = { url: file, size: bytes.length, sha512: crypto.createHash('sha512').update(bytes).digest('base64') }
+  const manifest = { version: '1.6.6', files: [entry] }
+  fs.writeFileSync(path.join(source, 'latest.yml'), YAML.stringify(manifest))
+  const output = await prepareUpdate('student', 'win32', root)
+  assert.ok(fs.existsSync(path.join(output, file)))
+  assert.ok(fs.existsSync(path.join(output, 'latest.yml')))
+  fs.appendFileSync(path.join(source, file), 'corrupt')
+  await assert.rejects(prepareUpdate('student', 'win32', root), /哈希/)
+  manifest.files[0].url = '../teacher.exe'
+  fs.writeFileSync(path.join(source, 'latest.yml'), YAML.stringify(manifest))
+  await assert.rejects(prepareUpdate('student', 'win32', root), /角色/)
+  fs.writeFileSync(path.join(source, '墨痕学生端-macOS-arm64-1.6.6.dmg'), 'test image')
+  const mac = await prepareUpdate('student', 'darwin', root)
+  const info = JSON.parse(fs.readFileSync(path.join(mac, 'latest.json'), 'utf8'))
+  assert.equal(info.file, '墨痕学生端-macOS-arm64-1.6.6.dmg')
+  assert.equal(info.platform, 'darwin')
+  assert.ok(fs.existsSync(path.join(output, 'latest.yml')), 'previous staging remains intact')
+})

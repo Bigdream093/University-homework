@@ -4,6 +4,7 @@ const path = require('node:path')
 const { Readable, Transform } = require('node:stream')
 const { pipeline } = require('node:stream/promises')
 const metadata = require('../package.json')
+const { createUpdateController } = require('./updater.cjs')
 
 const clientRole = metadata.clientRole === 'student' ? 'student' : 'teacher'
 const roleName = clientRole === 'teacher' ? '教师端' : '学生端'
@@ -13,8 +14,35 @@ const appId = clientRole === 'teacher' ? 'com.kexu.homework.teacher' : 'com.kexu
 let mainWindow
 let setupWindow
 let handlingLoadFailure = false
+let updateController
 const downloads = new Map()
 const DOWNLOAD_RECORD_TTL_MS = 5000
+
+function refreshUpdateMenu() {
+  const menu = Menu.getApplicationMenu()
+  for (const item of updateController?.menuItems() || []) {
+    const current = menu?.getMenuItemById(item.id)
+    if (current) {
+      current.label = item.label
+      current.enabled = item.enabled
+      current.visible = item.visible !== false
+    }
+  }
+}
+
+function logUpdate(value) {
+  try {
+    const file = path.join(app.getPath('userData'), 'updates.log')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    if (fs.existsSync(file) && fs.statSync(file).size > 256 * 1024) {
+      fs.renameSync(file, `${file}.previous`)
+    }
+    const entry = value instanceof Error ? value.name : String(value)
+    fs.appendFileSync(file, `${new Date().toISOString()} ${clientRole} ${app.getVersion()} ${entry}\n`)
+  } catch {
+    // Logging failures must not interrupt normal application use.
+  }
+}
 
 function settingsPath() {
   return path.join(app.getPath('userData'), 'settings.json')
@@ -430,6 +458,8 @@ function createMenu() {
     {
       label: '帮助',
       submenu: [
+        ...(updateController?.menuItems() || []),
+        { type: 'separator' },
         {
           label: `关于${productName}`,
           click: () =>
@@ -562,7 +592,20 @@ function openSetupWindow() {
 }
 
 app.setAppUserModelId(appId)
-app.whenReady().then(() => {
+const hasInstanceLock = app.requestSingleInstanceLock()
+if (!hasInstanceLock) app.quit()
+app.on('second-instance', () => {
+  const window = mainWindow || setupWindow
+  if (window?.isMinimized()) window.restore()
+  window?.focus()
+})
+if (hasInstanceLock) app.whenReady().then(() => {
+  updateController = createUpdateController({
+    app, dialog, shell, role: clientRole, baseUrl: metadata.updateBaseUrl || '',
+    onState: refreshUpdateMenu, log: logUpdate,
+    canInstall: () => ![...downloads.values()].some((record) =>
+      !['completed', 'failed', 'cancelled'].includes(record.state)),
+  })
   Menu.setApplicationMenu(createMenu())
 
   ipcMain.handle('settings:get', () => ({
