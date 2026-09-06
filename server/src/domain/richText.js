@@ -60,6 +60,15 @@ export function richTextSummary(content, limit = 160) {
   return Array.from(text.replace(/\s+/g, ' ').trim()).slice(0, limit).join('')
 }
 
+// 摘要按格式分流：纯文本直接截断，避免 <、> 被当成 HTML 标签丢弃。
+export function contentSummary(content, format, limit = 160) {
+  if (format !== 'html')
+    return Array.from(String(content || '').replace(/\s+/g, ' ').trim())
+      .slice(0, limit)
+      .join('')
+  return richTextSummary(content, limit)
+}
+
 export function richTextValue(value, label, max = 50000, required = true) {
   const content = sanitizeRichText(value)
   if (content.length > max)

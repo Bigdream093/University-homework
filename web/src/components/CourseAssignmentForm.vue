@@ -3,6 +3,7 @@ import RichTextEditor from './RichTextEditor.vue'
 import { reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import api, { messageOf } from '../api/request.js'
+import { editableRichText } from '../utils/richText.js'
 import { normalizeExtensions } from '../utils/assignmentForm.js'
 const props = defineProps({ courseId: { type: [String, Number], required: true } })
 const emit = defineEmits(['changed'])
@@ -31,7 +32,7 @@ function openAssignment(assignment) {
     assignment
       ? {
           title: assignment.title,
-          description: assignment.description || '',
+          description: editableRichText(assignment.description, assignment.description_format),
           type: assignment.type,
           deadline: assignment.deadline,
           total_score: assignment.total_score,

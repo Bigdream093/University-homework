@@ -31,7 +31,7 @@ function chapters(role) {
     .map((chapter) => ({
       ...chapter,
       body: fs.readFileSync(new URL('../../help/' + chapter.id + '.md', import.meta.url), 'utf8'),
-      version: '1.6.8',
+      version: '1.6.9',
     }))
 }
 router.get('/help/public', (_req, res) => res.json(chapters('public')))

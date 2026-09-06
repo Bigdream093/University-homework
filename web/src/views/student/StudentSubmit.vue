@@ -402,7 +402,10 @@ onUnmounted(() => {
       <section class="panel">
         <span class="badge">{{ assignment.type === 'online' ? '在线作答' : '文件作业' }}</span>
         <h2>作业要求</h2>
-        <RichTextContent :content="assignment.description || '老师暂未填写详细要求。'" />
+        <RichTextContent
+          :content="assignment.description || '老师暂未填写详细要求。'"
+          :format="assignment.description_format"
+        />
         <el-divider />
         <p class="hint">
           满分 {{ assignment.total_score }} · 允许重交

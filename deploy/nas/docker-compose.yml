@@ -1,6 +1,6 @@
 services:
   university-homework:
-    image: university-homework:1.6.8
+    image: university-homework:1.6.9
     pull_policy: never
     container_name: university-homework
     restart: unless-stopped

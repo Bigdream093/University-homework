@@ -1,7 +1,7 @@
 <script setup>
 import RichTextEditor from './RichTextEditor.vue'
 import RichTextContent from './RichTextContent.vue'
-import { richTextSummary } from '../utils/richText.js'
+import { contentSummary, editableRichText } from '../utils/richText.js'
 import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useUserStore } from '../stores/user.js'
@@ -72,7 +72,7 @@ function openFromPublic(row) {
 function newQuestion(row = null) {
   editId.value = row?.id || null
   title.value = row?.title || ''
-  content.value = row?.content || ''
+  content.value = editableRichText(row?.content, row?.content_format)
   compose.value = true
 }
 async function save() {
@@ -244,7 +244,7 @@ useRefresh(load)
       <article v-for="(row, index) in rows" :key="row.id" class="assignment-card collapsible-card">
         <div class="card-head" @click="publicCard.toggle(row.id)">
           <span v-if="row.pinned" class="badge" style="background: #e6a23c">置顶</span>
-          <b class="card-title">{{ richTextSummary(row.summary) }}</b>
+          <b class="card-title">{{ contentSummary(row.summary, row.content_format) }}</b>
           <span
             v-if="row.status === 'withdrawn'"
             class="badge"
@@ -270,7 +270,10 @@ useRefresh(load)
           <span class="card-chevron">{{ publicCard.isOpen(row.id) ? '收起 ▲' : '展开 ▼' }}</span>
         </div>
         <div v-if="publicCard.isOpen(row.id)" class="card-body">
-          <RichTextContent :content="row.summary" /><RichTextContent :content="row.reply" />
+          <RichTextContent :content="row.summary" :format="row.content_format" /><RichTextContent
+            :content="row.reply"
+            :format="row.content_format"
+          />
           <div v-if="teacher" class="toolbar" style="margin-bottom: 0">
             <el-button @click="openFromPublic(row)">查看原提问</el-button>
             <el-button
@@ -337,7 +340,7 @@ useRefresh(load)
       :close-on-press-escape="!anyImageBusy"
       :show-close="!anyImageBusy"
       ><template v-if="detail"
-        ><RichTextContent :content="detail.content" />
+        ><RichTextContent :content="detail.content" :format="detail.content_format" />
         <p class="hint">原题与对话仅提问人和教师可见；公开区只展示教师另写的匿名摘要。</p>
         <div class="toolbar">
           <template v-if="!teacher"
@@ -369,7 +372,7 @@ useRefresh(load)
           class="assignment-card"
         >
           <b>{{ replyRecord.author_name }} · {{ replyRecord.created_at }}</b>
-          <RichTextContent :content="replyRecord.content" />
+          <RichTextContent :content="replyRecord.content" :format="replyRecord.content_format" />
         </article>
         <template v-if="!readonly"
           ><RichTextEditor
@@ -399,8 +402,14 @@ useRefresh(load)
                 >{{ publicationRecord.status === 'published' ? '已公开' : '已撤回' }} ·
                 {{ publicationRecord.created_at }}</b
               >
-              <RichTextContent :content="publicationRecord.summary" />
-              <RichTextContent :content="publicationRecord.reply" />
+              <RichTextContent
+                :content="publicationRecord.summary"
+                :format="publicationRecord.content_format"
+              />
+              <RichTextContent
+                :content="publicationRecord.reply"
+                :format="publicationRecord.content_format"
+              />
             </div>
             <el-button
               v-if="teacher"

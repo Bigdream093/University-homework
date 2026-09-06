@@ -7,7 +7,7 @@ const assert = require('node:assert/strict')
 const YAML = require('../../desktop/node_modules/yaml')
 
 const root = path.resolve(__dirname, '../..')
-const release = path.join(root, 'release/1.6.8')
+const release = path.join(root, 'release/1.6.9')
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'mohen-nas-test-'))
 const project = `mohen-update-test-${Date.now()}`
 const file = path.join(temp, 'compose.yml')
@@ -40,8 +40,8 @@ async function main() {
     let r = await fetch(`${origin}/api/health`)
     const health = await r.json()
     assert.equal(health.ok, true)
-    assert.equal(health.version, '1.6.8')
-    passed.push('backend_health_1.6.8')
+    assert.equal(health.version, '1.6.9')
+    passed.push('backend_health_1.6.9')
     r = await fetch(`${origin}/login`)
     assert.equal(r.status, 200)
     assert.ok(r.headers.get('content-security-policy'))
@@ -52,7 +52,7 @@ async function main() {
       assert.equal(r.status, 200)
       assert.equal(r.headers.get('cache-control'), 'no-store')
       const info = YAML.parse(await r.text())
-      assert.equal(info.version, '1.6.6')
+      assert.equal(info.version, '1.6.9')
       const artifact = info.files[0]
       const url = `${origin}/update/${role}/win-x64/${encodeURIComponent(artifact.url)}`
       r = await fetch(url, { headers: { Range: 'bytes=0-31' } })
@@ -68,8 +68,8 @@ async function main() {
     }
     r = await fetch(`${origin}/update/student/mac-arm64/latest.json`)
     const mac = await r.json()
-    assert.equal(mac.version, '1.6.5')
-    assert.ok(mac.file.endsWith('-1.6.5.dmg'))
+    assert.equal(mac.version, '1.6.9')
+    assert.ok(mac.file.endsWith('-1.6.9.dmg'))
     r = await fetch(`${origin}/update/student/mac-arm64/${encodeURIComponent(mac.file)}`, { method: 'HEAD' })
     assert.equal(r.status, 200)
     passed.push('original_mac_dmg_available_without_false_version')

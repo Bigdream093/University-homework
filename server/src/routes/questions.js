@@ -1,11 +1,11 @@
 import { validateEditorImages } from "../services/editorImageAccess.js";
 import { contentFormat } from "../domain/contentFormat.js";
-import { richTextValue, sanitizeRichText } from "../domain/richText.js";
+import { sanitizeRichText } from "../domain/richText.js";
 import { Router } from "express";
 import { db } from "../db.js";
 import { auth } from "../middleware/auth.js";
 import { teacherOnly, studentOnly } from "../middleware/teacher.js";
-import { courseAccess, fail, textValue, pageOf } from "../services/access.js";
+import { courseAccess, contentValue, fail, textValue, pageOf } from "../services/access.js";
 import { nowText } from "../utils/time.js";
 const router = Router();
 function validateQuestionBody(req, _res, next) {
@@ -128,7 +128,7 @@ router.post(
         course.id,
         req.user.id,
         textValue(req.body.title, "标题", 200),
-        richTextValue(req.body.content, "问题内容"),
+        contentValue(req.body.content, contentFormat(req.body.content_format), "问题内容"),
         order,
         at,
         at,
@@ -170,7 +170,11 @@ router.put(
       "UPDATE course_questions SET title=?,content=?,updated_at=?,content_format=? WHERE id=?",
     ).run(
       textValue(req.body.title, "标题", 200),
-      richTextValue(req.body.content, "内容"),
+      contentValue(
+        req.body.content,
+        contentFormat(req.body.content_format ?? question.content_format),
+        "内容",
+      ),
       nowText(),
       contentFormat(req.body.content_format ?? question.content_format),
       question.id,
@@ -203,7 +207,7 @@ router.post(
       ).run(
         question.id,
         req.user.id,
-        richTextValue(req.body.content, "回复内容"),
+        contentValue(req.body.content, contentFormat(req.body.content_format), "回复内容"),
         at,
         contentFormat(req.body.content_format),
       );
@@ -223,8 +227,9 @@ router.post(
     db.transaction(() => {
       const question = visibleQuestion(req.params.id, req.user, true);
       if (question.hidden) fail(400, "问题已隐藏，不能公开");
-      const summary = richTextValue(req.body.summary, "公开摘要"),
-        reply = richTextValue(req.body.reply, "公开答复");
+      const format = contentFormat(req.body.content_format),
+        summary = contentValue(req.body.summary, format, "公开摘要"),
+        reply = contentValue(req.body.reply, format, "公开答复");
       withdrawPublications(question, req.user);
       db.prepare(
         "INSERT INTO question_publications(question_id,teacher_id,summary,reply,created_at,content_format) VALUES(?,?,?,?,?,?)",

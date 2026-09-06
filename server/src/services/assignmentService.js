@@ -1,8 +1,7 @@
 import { validateEditorImages } from '../services/editorImageAccess.js'
 import { contentFormat } from '../domain/contentFormat.js'
-import { richTextValue } from '../domain/richText.js'
 import { db } from '../db.js'
-import { courseAccess, assignmentAccess, textValue, fail, requireRole } from './access.js'
+import { contentValue, courseAccess, assignmentAccess, textValue, fail, requireRole } from './access.js'
 import { nowText, validTime } from '../utils/time.js'
 import { parseAllowedExtensions } from '../utils/fileFilter.js'
 import { moveContent, nextOrder } from './contentOrder.js'
@@ -53,9 +52,10 @@ function assignmentFields(body, current = {}) {
   const previewMax = Number(input.preview_max_count ?? 3)
   if (!Number.isInteger(previewMax) || previewMax < 1 || previewMax > 10)
     fail(400, '预览图上限必须是1到10张')
+  const format = contentFormat(input.description_format)
   return [
     title,
-    richTextValue(input.description, '作业要求', 50000, false),
+    contentValue(input.description, format, '作业要求', 50000, false),
     type,
     deadline,
     totalScore,
@@ -67,7 +67,7 @@ function assignmentFields(body, current = {}) {
     allowedExtensions ? allowedExtensions.join(',') : null,
     requirePreview,
     previewMax,
-    contentFormat(input.description_format),
+    format,
   ]
 }
 function publishValidatedAssignment(assignment) {

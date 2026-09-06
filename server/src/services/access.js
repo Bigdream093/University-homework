@@ -1,4 +1,5 @@
 import { db } from '../db.js'
+import { richTextValue } from '../domain/richText.js'
 
 export function fail(status, message) {
   throw Object.assign(new Error(message), { status })
@@ -13,6 +14,12 @@ export function textValue(value, label, max = 20000, required = true) {
   if ((required && !text) || text.length > max)
     fail(400, `${label}${!text ? '不能为空' : `不能超过${max}字`}`)
   return text
+}
+// 按格式分流：html 走白名单清洗，plain 及遗留 markdown 按普通字符串保存，避免改写旧正文。
+export function contentValue(value, format, label, max = 50000, required = true) {
+  return format === 'html'
+    ? richTextValue(value, label, max, required)
+    : textValue(value, label, max, required)
 }
 export function idValue(value) {
   const id = Number(value)

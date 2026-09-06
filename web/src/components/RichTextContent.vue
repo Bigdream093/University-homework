@@ -1,11 +1,14 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import api from '../api/request.js'
-import { renderRichText } from '../utils/richText.js'
+import { renderContent } from '../utils/richText.js'
 
-const props = defineProps({ content: { type: String, default: '' } })
+const props = defineProps({
+  content: { type: String, default: '' },
+  format: { type: String, default: 'html' },
+})
 const root = ref(null)
-const html = computed(() => renderRichText(props.content))
+const html = computed(() => renderContent(props.content, props.format))
 let generation = 0
 let controller
 const urls = new Set()
@@ -53,13 +56,23 @@ onBeforeUnmount(() => {
 })
 </script>
 
-<template><div ref="root" class="rich-text-content" v-html="html"></div></template>
+<template>
+  <div
+    ref="root"
+    class="rich-text-content"
+    :class="{ plain: format !== 'html' }"
+    v-html="html"
+  ></div>
+</template>
 
 <style scoped>
 .rich-text-content {
   min-width: 0;
   line-height: 1.8;
   overflow-wrap: anywhere;
+}
+.rich-text-content.plain {
+  white-space: pre-wrap;
 }
 .rich-text-content :deep(img) {
   display: block;

@@ -6,6 +6,7 @@ import { useCollapse } from '../../composables/useCollapse.js'
 import api, { messageOf } from '../../api/request.js'
 import RichTextEditor from '../../components/RichTextEditor.vue'
 import RichTextContent from '../../components/RichTextContent.vue'
+import { editableRichText } from '../../utils/richText.js'
 const imageBusy = ref(false)
 const originalStatus = ref('draft'),
   historyDialog = ref(false),
@@ -52,7 +53,7 @@ function open(notice) {
   form.value = notice
     ? {
         title: notice.title,
-        content: notice.content || '',
+        content: editableRichText(notice.content, notice.content_format),
         pinned: Boolean(notice.pinned),
         status:
           notice.status === 'scheduled'
@@ -163,7 +164,7 @@ useRefresh(load)
           }}</span>
         </div>
         <div v-if="noticeCard.isOpen(notice.id)" class="card-body">
-          <RichTextContent :content="notice.content" />
+          <RichTextContent :content="notice.content" :format="notice.content_format" />
           <div class="assignment-actions">
             <el-button @click="showHistory(notice)">历史</el-button
             ><el-button @click="showReaders(notice)">已读名单</el-button
@@ -257,7 +258,10 @@ useRefresh(load)
           class="assignment-card"
         >
           <b>版本{{ revision.revision }} · {{ revision.changed_at }} · {{ revision.title }}</b>
-          <RichTextContent :content="revision.content" /></article></template
+          <RichTextContent
+            :content="revision.content"
+            :format="revision.content_format"
+          /></article></template
     ></el-dialog>
   </div>
 </template>

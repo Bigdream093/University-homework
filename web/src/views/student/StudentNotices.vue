@@ -84,7 +84,11 @@ useRefresh(load)
             :closable="false"
             style="margin-bottom: 12px"
           />
-          <RichTextContent v-else-if="details[notice.id]" :content="details[notice.id].content" />
+          <RichTextContent
+            v-else-if="details[notice.id]"
+            :content="details[notice.id].content"
+            :format="details[notice.id].content_format"
+          />
           <p v-else class="notice-content" style="margin: 0">{{ notice.content_preview }}</p>
         </div>
       </article>

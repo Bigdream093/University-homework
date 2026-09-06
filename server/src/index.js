@@ -48,7 +48,7 @@ app.use(express.json({ limit: '2mb' }))
 const tzOk = process.env.TZ === 'Asia/Shanghai'
 if (!tzOk && process.env.NODE_ENV !== 'test') console.warn('建议设置 TZ=Asia/Shanghai')
 app.get('/api/health', (_req, res) =>
-  res.json({ ok: true, version: '1.6.8', timezone: 'Asia/Shanghai', tz_configured: tzOk }),
+  res.json({ ok: true, version: '1.6.9', timezone: 'Asia/Shanghai', tz_configured: tzOk }),
 )
 app.use('/api/auth', authRoutes)
 app.use(

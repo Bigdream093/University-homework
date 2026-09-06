@@ -82,7 +82,10 @@ async function moveAssignment(assignment, direction) {
           }}</span>
         </div>
         <div v-if="assignmentCard.isOpen(assignment.id)" class="card-body">
-          <RichTextContent :content="assignment.description || '暂无作业说明'" />
+          <RichTextContent
+            :content="assignment.description || '暂无作业说明'"
+            :format="assignment.description_format"
+          />
           <span class="hint" style="display: block; margin-bottom: 12px"
             >{{ assignment.work_mode === 'group' ? '分组作业' : '个人作业' }} · 满分{{
               assignment.total_score

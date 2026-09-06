@@ -320,6 +320,7 @@ onBeforeUnmount(() => {
   align-items: center;
   flex-wrap: wrap;
   gap: 7px;
+  margin-top: 10px;
   margin-bottom: 10px;
 }
 .editor-toolbar :deep(.el-button + .el-button) {
