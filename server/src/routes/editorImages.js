@@ -55,7 +55,7 @@ router.post(
   },
 )
 
-// Access follows visible Markdown references, including copied courses. Draft images are teacher-only.
+// Access follows visible rich-text references, including copied courses. Draft images are teacher-only.
 router.get('/editor-images/:id', auth, (req, res) => {
   const row = db.prepare('SELECT * FROM editor_images WHERE id=?').get(req.params.id)
   if (!row) fail(404, '图片不存在')

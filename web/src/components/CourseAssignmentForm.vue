@@ -1,6 +1,5 @@
 <script setup>
-import MarkdownEditor from './MarkdownEditor.vue'
-import { editableMarkdown } from '../utils/markdown.js'
+import RichTextEditor from './RichTextEditor.vue'
 import { reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import api, { messageOf } from '../api/request.js'
@@ -32,7 +31,7 @@ function openAssignment(assignment) {
     assignment
       ? {
           title: assignment.title,
-          description: editableMarkdown(assignment.description, assignment.description_format),
+          description: assignment.description || '',
           type: assignment.type,
           deadline: assignment.deadline,
           total_score: assignment.total_score,
@@ -65,7 +64,7 @@ function openAssignment(assignment) {
 }
 async function saveAssignment() {
   if (imageBusy.value) return ElMessage.warning('请等待图片上传完成，或处理失败图片')
-  assignmentForm.description_format = 'markdown'
+  assignmentForm.description_format = 'html'
   if (assignmentForm.type === 'document') {
     const parsed = normalizeExtensions(assignmentForm.allowed_extensions)
     if (parsed.error) {
@@ -110,11 +109,11 @@ defineExpose({ open: openAssignment })
       </p>
       <el-form-item label="作业标题"><el-input v-model="assignmentForm.title" /></el-form-item>
       <el-form-item label="作业要求"
-        ><MarkdownEditor
+        ><RichTextEditor
           v-if="assignmentDialog"
           v-model="assignmentForm.description"
           :course-id="courseId"
-          label="作业要求 Markdown"
+          label="作业要求富文本"
           @busy="imageBusy = $event"
       /></el-form-item>
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px">

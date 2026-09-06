@@ -1,6 +1,6 @@
 import { validateEditorImages } from '../services/editorImageAccess.js'
 import { contentFormat } from '../domain/contentFormat.js'
-import { markdownSummary } from '../domain/markdown.js'
+import { richTextSummary, richTextValue } from '../domain/richText.js'
 import { db } from '../db.js'
 import { courseAccess, fail, textValue } from './access.js'
 import { isFuture, nowText } from '../utils/time.js'
@@ -57,7 +57,7 @@ export function listNotices(courseId, user, res) {
       content_preview:
         notice.status === 'withdrawn'
           ? '该通知已被教师撤回'
-          : markdownSummary(notice.content, notice.content_format),
+          : richTextSummary(notice.content),
       is_read: !!notice.first_read_at,
       is_updated:
         notice.status === 'published' &&
@@ -126,7 +126,7 @@ function statusInput(body) {
 export function createNotice(courseId, teacherId, body, res) {
   courseAccess(courseId, { id: teacherId, role: 'teacher' }, { write: true })
   const title = textValue(body.title, '通知标题', 200),
-    content = textValue(body.content, '通知正文', 50000, false),
+    content = richTextValue(body.content, '通知正文', 50000, false),
     format = contentFormat(body.content_format),
     status = statusInput(body),
     at = nowText()
@@ -176,7 +176,7 @@ export function updateNotice(id, teacherId, body, res) {
     if (status === 'scheduled' && !isFuture(scheduled))
       fail(400, '定时发布时间必须是有效的未来北京时间')
     const title = textValue(body.title ?? notice.title, '通知标题', 200),
-      content = textValue(body.content ?? notice.content, '通知正文', 50000, false),
+      content = richTextValue(body.content ?? notice.content, '通知正文', 50000, false),
       format = contentFormat(body.content_format ?? notice.content_format),
       at = nowText()
     validateEditorImages(content, format, { id: teacherId, role: 'teacher' })

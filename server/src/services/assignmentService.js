@@ -1,5 +1,6 @@
 import { validateEditorImages } from '../services/editorImageAccess.js'
 import { contentFormat } from '../domain/contentFormat.js'
+import { richTextValue } from '../domain/richText.js'
 import { db } from '../db.js'
 import { courseAccess, assignmentAccess, textValue, fail, requireRole } from './access.js'
 import { nowText, validTime } from '../utils/time.js'
@@ -54,7 +55,7 @@ function assignmentFields(body, current = {}) {
     fail(400, '预览图上限必须是1到10张')
   return [
     title,
-    textValue(input.description, '作业要求', 20000, false),
+    richTextValue(input.description, '作业要求', 50000, false),
     type,
     deadline,
     totalScore,

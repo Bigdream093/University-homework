@@ -7,7 +7,7 @@ const assert = require('node:assert/strict')
 const YAML = require('../../desktop/node_modules/yaml')
 
 const root = path.resolve(__dirname, '../..')
-const release = path.join(root, 'release/1.6.6')
+const release = path.join(root, 'release/1.6.8')
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'mohen-nas-test-'))
 const project = `mohen-update-test-${Date.now()}`
 const file = path.join(temp, 'compose.yml')
@@ -40,8 +40,8 @@ async function main() {
     let r = await fetch(`${origin}/api/health`)
     const health = await r.json()
     assert.equal(health.ok, true)
-    assert.equal(health.version, '1.6.6')
-    passed.push('backend_health_1.6.6')
+    assert.equal(health.version, '1.6.8')
+    passed.push('backend_health_1.6.8')
     r = await fetch(`${origin}/login`)
     assert.equal(r.status, 200)
     assert.ok(r.headers.get('content-security-policy'))
@@ -80,7 +80,7 @@ async function main() {
     fs.writeFileSync(path.join(release, 'DEPLOYMENT-VALIDATION.json'), JSON.stringify({
       testedAt: new Date().toISOString(), environment: 'isolated local Docker linux/amd64',
       nasModified: false, productionDataUsed: false, passed,
-      notTested: ['NAS live deployment', 'Windows installed A-to-B upgrade', 'Mac 1.6.6 build and real-device install', '10GB concurrent upload'],
+      notTested: ['NAS live deployment', 'real PowerPoint clipboard on Windows', 'Windows installed A-to-B upgrade', 'Mac desktop rebuild', '10GB concurrent upload'],
     }, null, 2) + '\n')
     console.log(`Passed ${passed.length} deployment checks.`)
   } finally {

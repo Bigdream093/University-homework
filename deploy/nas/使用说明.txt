@@ -1,4 +1,4 @@
-墨痕 1.6.6 升级说明（继续使用 NAS 原部署目录）
+墨痕 1.6.8 升级说明（继续使用 NAS 原部署目录）
 
 1. 停止旧项目，备份原目录中的 .env、data、uploads 和 docker-compose.yml。
 
@@ -6,33 +6,26 @@
    docker-compose.yml
    nginx.conf
    update 文件夹
-   university-homework-1.6.6-linux-amd64.tar
+   university-homework-1.6.8-linux-amd64.tar
    nginx-mohen-1.6.6-linux-amd64.tar
 
-   保留 NAS 原来的 .env、data、uploads，不要用本包的 .env 覆盖。
+   保留 NAS 原来的 .env、data、uploads，不要用本包的 .env.example 覆盖 .env。
+   导入前可使用 SHA256SUMS.txt 核对文件完整性。
 
-3. 在 NAS Docker 的“镜像”页面导入上面两个 tar 文件。
-   不需要重新构建镜像。
+3. 在 NAS Docker 的“镜像”页面导入两个 tar 文件。Nginx 镜像沿用 1.6.6，业务镜像更新为 1.6.8。
 
-4. 在 NAS Docker 中打开原项目，重新读取更新后的 docker-compose.yml，执行“重新部署/重建”。
-   不要只点“重启”。完成后应有业务、Nginx 两个容器运行。
+4. 在 NAS Docker 中打开原项目，重新读取更新后的 docker-compose.yml，执行“重新部署/重建”，不要只点“重启”。
    如果用命令行，在原部署目录执行：
    docker compose up -d --force-recreate
 
 5. 打开原网址：http://nas.mchen.asia:34567
-   确认能登录，原课程和文件仍在。
-   如果出现空系统，立即停止项目，检查是否使用了原数据目录。
+   确认能登录，原课程和文件仍在。健康接口 /api/health 应返回版本 1.6.8。
 
-6. 打开下面的地址，应显示或下载版本清单，不应出现网站首页：
-   http://nas.mchen.asia:34567/update/teacher/win-x64/latest.yml
-   http://nas.mchen.asia:34567/update/student/win-x64/latest.yml
+6. 桌面客户端无需重新安装。本版没有重新构建 Windows 或 macOS 安装包；既有客户端会直接加载 NAS 上的新页面。
 
-7. 给教师和学生手动安装本包 Windows 1.6.6 一次。
-   以后通过“帮助 → 检查更新”更新，下载后点“重启并更新”。
-   程序不会在启动或运行期间自动检查。
-
-补充：
-- 业务镜像和 Windows 客户端均为1.6.6。本版新增作业说明、通知和课程问答的 Markdown 图文编辑，支持表格以及选择、粘贴、拖拽上传图片。
-- Mac暂时保留1.6.5，下载DMG后手动替换应用。
-- 直接打开 /update/ 显示403是正常的；请用上面的具体文件地址检查。
+本版变化：
+- 作业说明、通知、课程问答改为所见即所得富文本编辑。
+- 支持选择图片、粘贴截图或 PPT 图片、拖拽上传图片。
+- 表格支持增加/删除行列、合并/拆分单元格和拖动列宽。
+- PPT 必须向系统剪贴板提供 PNG/JPG/WebP 位图；若 Office 只提供专用 OLE 对象，请在 PPT 中使用“复制为图片”后再粘贴。
 - 不要删除 data、uploads 或数据卷。

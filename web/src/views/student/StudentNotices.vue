@@ -4,7 +4,7 @@ import { ElMessage } from 'element-plus'
 import { useRefresh } from '../../composables/useRefresh.js'
 import { useCollapse } from '../../composables/useCollapse.js'
 import api, { messageOf } from '../../api/request.js'
-import MarkdownContent from '../../components/MarkdownContent.vue'
+import RichTextContent from '../../components/RichTextContent.vue'
 const props = defineProps({ courseId: { type: [String, Number], required: true } })
 const emit = defineEmits(['read'])
 const notices = ref([])
@@ -84,11 +84,7 @@ useRefresh(load)
             :closable="false"
             style="margin-bottom: 12px"
           />
-          <MarkdownContent
-            v-else-if="details[notice.id]"
-            :content="details[notice.id].content"
-            :format="details[notice.id].content_format"
-          />
+          <RichTextContent v-else-if="details[notice.id]" :content="details[notice.id].content" />
           <p v-else class="notice-content" style="margin: 0">{{ notice.content_preview }}</p>
         </div>
       </article>

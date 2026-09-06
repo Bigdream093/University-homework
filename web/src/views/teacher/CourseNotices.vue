@@ -4,9 +4,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRefresh } from '../../composables/useRefresh.js'
 import { useCollapse } from '../../composables/useCollapse.js'
 import api, { messageOf } from '../../api/request.js'
-import MarkdownEditor from '../../components/MarkdownEditor.vue'
-import MarkdownContent from '../../components/MarkdownContent.vue'
-import { editableMarkdown } from '../../utils/markdown.js'
+import RichTextEditor from '../../components/RichTextEditor.vue'
+import RichTextContent from '../../components/RichTextContent.vue'
 const imageBusy = ref(false)
 const originalStatus = ref('draft'),
   historyDialog = ref(false),
@@ -53,7 +52,7 @@ function open(notice) {
   form.value = notice
     ? {
         title: notice.title,
-        content: editableMarkdown(notice.content, notice.content_format),
+        content: notice.content || '',
         pinned: Boolean(notice.pinned),
         status:
           notice.status === 'scheduled'
@@ -68,7 +67,7 @@ function open(notice) {
 }
 async function save() {
   if (imageBusy.value) return ElMessage.warning('请先完成图片上传')
-  form.value.content_format = 'markdown'
+  form.value.content_format = 'html'
   if (!form.value.title.trim()) return ElMessage.warning('请填写通知标题')
   try {
     if (editId.value) await api.put(`/notices/${editId.value}`, form.value)
@@ -164,7 +163,7 @@ useRefresh(load)
           }}</span>
         </div>
         <div v-if="noticeCard.isOpen(notice.id)" class="card-body">
-          <MarkdownContent :content="notice.content" :format="notice.content_format" />
+          <RichTextContent :content="notice.content" />
           <div class="assignment-actions">
             <el-button @click="showHistory(notice)">历史</el-button
             ><el-button @click="showReaders(notice)">已读名单</el-button
@@ -210,11 +209,11 @@ useRefresh(load)
       ><el-form label-position="top"
         ><el-form-item label="标题"><el-input v-model="form.title" /></el-form-item
         ><el-form-item label="内容"
-          ><MarkdownEditor
+          ><RichTextEditor
             v-if="dialog"
             v-model="form.content"
             :course-id="courseId"
-            label="通知内容 Markdown"
+            label="通知内容富文本"
             @busy="imageBusy = $event" /></el-form-item
         ><el-form-item v-if="originalStatus !== 'published'" label="发布方式"
           ><el-radio-group v-model="form.status"
@@ -258,10 +257,7 @@ useRefresh(load)
           class="assignment-card"
         >
           <b>版本{{ revision.revision }} · {{ revision.changed_at }} · {{ revision.title }}</b>
-          <MarkdownContent
-            :content="revision.content"
-            :format="revision.content_format"
-          /></article></template
+          <RichTextContent :content="revision.content" /></article></template
     ></el-dialog>
   </div>
 </template>

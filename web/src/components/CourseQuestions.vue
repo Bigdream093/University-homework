@@ -1,7 +1,7 @@
 <script setup>
-import MarkdownEditor from './MarkdownEditor.vue'
-import MarkdownContent from './MarkdownContent.vue'
-import { editableMarkdown, markdownSummary } from '../utils/markdown.js'
+import RichTextEditor from './RichTextEditor.vue'
+import RichTextContent from './RichTextContent.vue'
+import { richTextSummary } from '../utils/richText.js'
 import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useUserStore } from '../stores/user.js'
@@ -72,7 +72,7 @@ function openFromPublic(row) {
 function newQuestion(row = null) {
   editId.value = row?.id || null
   title.value = row?.title || ''
-  content.value = editableMarkdown(row?.content, row?.content_format)
+  content.value = row?.content || ''
   compose.value = true
 }
 async function save() {
@@ -82,13 +82,13 @@ async function save() {
       await api.put('/questions/' + editId.value, {
         title: title.value,
         content: content.value,
-        content_format: 'markdown',
+        content_format: 'html',
       })
     else
       await api.post('/courses/' + props.courseId + '/questions', {
         title: title.value,
         content: content.value,
-        content_format: 'markdown',
+        content_format: 'html',
       })
     compose.value = false
     await load()
@@ -121,8 +121,7 @@ async function publicAction(row, suffix, message) {
 }
 async function sendReply() {
   if (replyBusy.value) return ElMessage.warning('请先完成图片上传')
-  if (await action('/replies', { content: reply.value, content_format: 'markdown' }))
-    reply.value = ''
+  if (await action('/replies', { content: reply.value, content_format: 'html' })) reply.value = ''
 }
 async function remove() {
   try {
@@ -183,7 +182,7 @@ async function publish() {
     await action('/publish', {
       summary: summary.value,
       reply: publicReply.value,
-      content_format: 'markdown',
+      content_format: 'html',
     })
   )
     publication.value = false
@@ -245,7 +244,7 @@ useRefresh(load)
       <article v-for="(row, index) in rows" :key="row.id" class="assignment-card collapsible-card">
         <div class="card-head" @click="publicCard.toggle(row.id)">
           <span v-if="row.pinned" class="badge" style="background: #e6a23c">置顶</span>
-          <b class="card-title">{{ markdownSummary(row.summary, row.content_format) }}</b>
+          <b class="card-title">{{ richTextSummary(row.summary) }}</b>
           <span
             v-if="row.status === 'withdrawn'"
             class="badge"
@@ -271,10 +270,7 @@ useRefresh(load)
           <span class="card-chevron">{{ publicCard.isOpen(row.id) ? '收起 ▲' : '展开 ▼' }}</span>
         </div>
         <div v-if="publicCard.isOpen(row.id)" class="card-body">
-          <MarkdownContent :content="row.summary" :format="row.content_format" /><MarkdownContent
-            :content="row.reply"
-            :format="row.content_format"
-          />
+          <RichTextContent :content="row.summary" /><RichTextContent :content="row.reply" />
           <div v-if="teacher" class="toolbar" style="margin-bottom: 0">
             <el-button @click="openFromPublic(row)">查看原提问</el-button>
             <el-button
@@ -318,11 +314,11 @@ useRefresh(load)
       :close-on-click-modal="false"
       :close-on-press-escape="!anyImageBusy"
       :show-close="!anyImageBusy"
-      ><el-input v-model="title" placeholder="标题" maxlength="200" /><MarkdownEditor
+      ><el-input v-model="title" placeholder="标题" maxlength="200" /><RichTextEditor
         v-if="compose"
         v-model="content"
         :course-id="courseId"
-        label="问题内容 Markdown"
+        label="问题内容富文本"
         @busy="composeBusy = $event"
       />
       <p class="hint">原始内容不会直接公开；教师可以另行整理匿名摘要和答复。</p>
@@ -341,7 +337,7 @@ useRefresh(load)
       :close-on-press-escape="!anyImageBusy"
       :show-close="!anyImageBusy"
       ><template v-if="detail"
-        ><MarkdownContent :content="detail.content" :format="detail.content_format" />
+        ><RichTextContent :content="detail.content" />
         <p class="hint">原题与对话仅提问人和教师可见；公开区只展示教师另写的匿名摘要。</p>
         <div class="toolbar">
           <template v-if="!teacher"
@@ -373,14 +369,14 @@ useRefresh(load)
           class="assignment-card"
         >
           <b>{{ replyRecord.author_name }} · {{ replyRecord.created_at }}</b>
-          <MarkdownContent :content="replyRecord.content" :format="replyRecord.content_format" />
+          <RichTextContent :content="replyRecord.content" />
         </article>
         <template v-if="!readonly"
-          ><MarkdownEditor
+          ><RichTextEditor
             v-if="dialog"
             v-model="reply"
             :course-id="courseId"
-            label="私人回复 Markdown"
+            label="私人回复富文本"
             @busy="replyBusy = $event"
           /><el-button
             type="primary"
@@ -403,14 +399,8 @@ useRefresh(load)
                 >{{ publicationRecord.status === 'published' ? '已公开' : '已撤回' }} ·
                 {{ publicationRecord.created_at }}</b
               >
-              <MarkdownContent
-                :content="publicationRecord.summary"
-                :format="publicationRecord.content_format"
-              />
-              <MarkdownContent
-                :content="publicationRecord.reply"
-                :format="publicationRecord.content_format"
-              />
+              <RichTextContent :content="publicationRecord.summary" />
+              <RichTextContent :content="publicationRecord.reply" />
             </div>
             <el-button
               v-if="teacher"
@@ -435,17 +425,17 @@ useRefresh(load)
       :close-on-press-escape="!anyImageBusy"
       :show-close="!anyImageBusy"
       ><p>请删除私人信息；公开后已被阅读的内容无法收回。</p>
-      <MarkdownEditor
+      <RichTextEditor
         v-if="publication"
         v-model="summary"
         :course-id="courseId"
-        label="公开问题摘要 Markdown"
+        label="公开问题摘要富文本"
         @busy="summaryBusy = $event"
-      /><MarkdownEditor
+      /><RichTextEditor
         v-if="publication"
         v-model="publicReply"
         :course-id="courseId"
-        label="公开答复 Markdown"
+        label="公开答复富文本"
         @busy="publicReplyBusy = $event"
       /><template #footer
         ><el-button type="primary" :disabled="summaryBusy || publicReplyBusy" @click="publish"

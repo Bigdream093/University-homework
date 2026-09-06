@@ -1,5 +1,5 @@
 import { db } from '../db.js'
-import { imageIds } from '../domain/markdown.js'
+import { imageIds } from '../domain/richText.js'
 import { fail } from './access.js'
 
 export function canReadEditorImage(row, user) {
@@ -20,15 +20,15 @@ export function canReadEditorImage(row, user) {
     for (const course of courses) {
       const rows = db
         .prepare(
-          `SELECT description AS content FROM assignments WHERE course_id=? AND description_format='markdown' ${user.role === 'student' ? "AND status IN ('published','closed')" : ''}
-        UNION ALL SELECT content FROM notices WHERE course_id=? AND content_format='markdown' ${user.role === 'student' ? "AND status='published'" : ''}`,
+          `SELECT description AS content FROM assignments WHERE course_id=? AND description_format='html' ${user.role === 'student' ? "AND status IN ('published','closed')" : ''}
+        UNION ALL SELECT content FROM notices WHERE course_id=? AND content_format='html' ${user.role === 'student' ? "AND status='published'" : ''}`,
         )
         .all(course.id, course.id)
       if (user.role === 'teacher')
         rows.push(
           ...db
             .prepare(
-              "SELECT r.content FROM notice_revisions r JOIN notices n ON n.id=r.notice_id WHERE n.course_id=? AND r.content_format='markdown'",
+              "SELECT r.content FROM notice_revisions r JOIN notices n ON n.id=r.notice_id WHERE n.course_id=? AND r.content_format='html'",
             )
             .all(course.id),
         )
@@ -37,20 +37,20 @@ export function canReadEditorImage(row, user) {
       rows.push(
         ...db
           .prepare(
-            `SELECT q.content FROM course_questions q WHERE q.course_id=? AND q.content_format='markdown' ${privateFilter}`,
+            `SELECT q.content FROM course_questions q WHERE q.course_id=? AND q.content_format='html' ${privateFilter}`,
           )
           .all(...args),
       )
       rows.push(
         ...db
           .prepare(
-            `SELECT r.content FROM question_replies r JOIN course_questions q ON q.id=r.question_id WHERE q.course_id=? AND r.content_format='markdown' ${privateFilter}`,
+            `SELECT r.content FROM question_replies r JOIN course_questions q ON q.id=r.question_id WHERE q.course_id=? AND r.content_format='html' ${privateFilter}`,
           )
           .all(...args),
       )
       const pubs = db
         .prepare(
-          `SELECT p.summary,p.reply FROM question_publications p JOIN course_questions q ON q.id=p.question_id WHERE q.course_id=? AND p.content_format='markdown' ${user.role === 'teacher' ? '' : "AND ((p.status='published' AND q.hidden=0) OR q.student_id=?)"}`,
+          `SELECT p.summary,p.reply FROM question_publications p JOIN course_questions q ON q.id=p.question_id WHERE q.course_id=? AND p.content_format='html' ${user.role === 'teacher' ? '' : "AND ((p.status='published' AND q.hidden=0) OR q.student_id=?)"}`,
         )
         .all(...args)
       for (const pub of pubs) rows.push({ content: pub.summary }, { content: pub.reply })
@@ -64,7 +64,7 @@ export function canReadEditorImage(row, user) {
 }
 
 export function validateEditorImages(content, format, user) {
-  if (format !== 'markdown') return
+  if (format !== 'html') return
   for (const id of imageIds(content)) {
     const row = db.prepare('SELECT * FROM editor_images WHERE id=?').get(id)
     if (!row || !canReadEditorImage(row, user)) fail(403, '正文包含不存在或无权使用的图片')

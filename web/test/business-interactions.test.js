@@ -269,7 +269,7 @@ test('课程页：提取后的作业表单新建、校验后缀并清空再次�
   const created = view.requests.find(r => r.method === 'post')
   assert.equal(created.body.title, '新作业')
   assert.equal(created.body.allowed_extensions, 'zip,dwg')
-  assert.equal(created.body.description_format, 'markdown')
+  assert.equal(created.body.description_format, 'html')
   await click(button(view, '发布新作业'))
   assert.equal(nodes(view.root, 'el-input')[0].props.modelValue, '')
 })

@@ -1,5 +1,5 @@
 <script setup>
-import MarkdownContent from './MarkdownContent.vue'
+import RichTextContent from './RichTextContent.vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api, { messageOf } from '../api/request.js'
@@ -82,10 +82,7 @@ async function moveAssignment(assignment, direction) {
           }}</span>
         </div>
         <div v-if="assignmentCard.isOpen(assignment.id)" class="card-body">
-          <MarkdownContent
-            :content="assignment.description || '暂无作业说明'"
-            :format="assignment.description_format"
-          />
+          <RichTextContent :content="assignment.description || '暂无作业说明'" />
           <span class="hint" style="display: block; margin-bottom: 12px"
             >{{ assignment.work_mode === 'group' ? '分组作业' : '个人作业' }} · 满分{{
               assignment.total_score
