@@ -4,7 +4,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRefresh } from '../../composables/useRefresh.js'
 import { useCollapse } from '../../composables/useCollapse.js'
 import api, { messageOf } from '../../api/request.js'
-import linkify from '../../utils/linkify.js'
+import MarkdownEditor from '../../components/MarkdownEditor.vue'
+import MarkdownContent from '../../components/MarkdownContent.vue'
+import { editableMarkdown } from '../../utils/markdown.js'
+const imageBusy = ref(false)
 const originalStatus = ref('draft'),
   historyDialog = ref(false),
   revisionDetail = ref(null)
@@ -50,7 +53,7 @@ function open(notice) {
   form.value = notice
     ? {
         title: notice.title,
-        content: notice.content,
+        content: editableMarkdown(notice.content, notice.content_format),
         pinned: Boolean(notice.pinned),
         status:
           notice.status === 'scheduled'
@@ -64,6 +67,8 @@ function open(notice) {
   dialog.value = true
 }
 async function save() {
+  if (imageBusy.value) return ElMessage.warning('请先完成图片上传')
+  form.value.content_format = 'markdown'
   if (!form.value.title.trim()) return ElMessage.warning('请填写通知标题')
   try {
     if (editId.value) await api.put(`/notices/${editId.value}`, form.value)
@@ -159,10 +164,7 @@ useRefresh(load)
           }}</span>
         </div>
         <div v-if="noticeCard.isOpen(notice.id)" class="card-body">
-          <p
-            style="white-space: pre-wrap; line-height: 1.8; color: #566e69; margin: 0 0 14px"
-            v-html="linkify(notice.content)"
-          ></p>
+          <MarkdownContent :content="notice.content" :format="notice.content_format" />
           <div class="assignment-actions">
             <el-button @click="showHistory(notice)">历史</el-button
             ><el-button @click="showReaders(notice)">已读名单</el-button
@@ -195,11 +197,25 @@ useRefresh(load)
       </article>
     </div>
     <div v-else class="empty">还没有通知。</div>
-    <el-dialog v-model="dialog" :title="editId ? '编辑通知' : '发布通知'" width="min(560px,92vw)"
+    <el-dialog
+      v-model="dialog"
+      :title="editId ? '编辑通知' : '发布通知'"
+      width="min(1180px,96vw)"
+      top="3vh"
+      class="markdown-dialog"
+      destroy-on-close
+      :close-on-click-modal="false"
+      :close-on-press-escape="!imageBusy"
+      :show-close="!imageBusy"
       ><el-form label-position="top"
         ><el-form-item label="标题"><el-input v-model="form.title" /></el-form-item
         ><el-form-item label="内容"
-          ><el-input v-model="form.content" type="textarea" :rows="6" /></el-form-item
+          ><MarkdownEditor
+            v-if="dialog"
+            v-model="form.content"
+            :course-id="courseId"
+            label="通知内容 Markdown"
+            @busy="imageBusy = $event" /></el-form-item
         ><el-form-item v-if="originalStatus !== 'published'" label="发布方式"
           ><el-radio-group v-model="form.status"
             ><el-radio value="draft">草稿</el-radio><el-radio value="published">立即发布</el-radio
@@ -212,8 +228,10 @@ useRefresh(load)
             value-format="YYYY-MM-DD HH:mm:ss" /></el-form-item
         ><el-checkbox v-model="form.pinned">置顶显示</el-checkbox></el-form
       ><template #footer
-        ><el-button @click="dialog = false">取消</el-button
-        ><el-button type="primary" color="#15554e" @click="save">保存</el-button></template
+        ><el-button :disabled="imageBusy" @click="dialog = false">取消</el-button
+        ><el-button type="primary" color="#15554e" :disabled="imageBusy" @click="save"
+          >保存</el-button
+        ></template
       ></el-dialog
     ><el-dialog v-model="readersDialog" title="已读学生" width="min(520px,92vw)"
       ><el-table :data="readers"
@@ -240,10 +258,10 @@ useRefresh(load)
           class="assignment-card"
         >
           <b>版本{{ revision.revision }} · {{ revision.changed_at }} · {{ revision.title }}</b>
-          <p
-            style="white-space: pre-wrap"
-            v-html="linkify(revision.content)"
-          ></p></article></template
+          <MarkdownContent
+            :content="revision.content"
+            :format="revision.content_format"
+          /></article></template
     ></el-dialog>
   </div>
 </template>

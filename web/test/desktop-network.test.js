@@ -54,6 +54,7 @@ runInNewContext(read(mainPath) + '\nmodule.exports = {testServer, writeSettings,
   require: (name) => name === 'electron' ? {
     app: {
       getVersion: () => 'test',
+      requestSingleInstanceLock: () => true,
       getPath: (kind) => path.join(directory, kind),
       setAppUserModelId() {},
       whenReady: () => ({ then() {} }),

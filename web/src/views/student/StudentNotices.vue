@@ -4,7 +4,7 @@ import { ElMessage } from 'element-plus'
 import { useRefresh } from '../../composables/useRefresh.js'
 import { useCollapse } from '../../composables/useCollapse.js'
 import api, { messageOf } from '../../api/request.js'
-import linkify from '../../utils/linkify.js'
+import MarkdownContent from '../../components/MarkdownContent.vue'
 const props = defineProps({ courseId: { type: [String, Number], required: true } })
 const emit = defineEmits(['read'])
 const notices = ref([])
@@ -84,12 +84,11 @@ useRefresh(load)
             :closable="false"
             style="margin-bottom: 12px"
           />
-          <p
+          <MarkdownContent
             v-else-if="details[notice.id]"
-            class="notice-content"
-            style="margin: 0"
-            v-html="linkify(details[notice.id].content)"
-          ></p>
+            :content="details[notice.id].content"
+            :format="details[notice.id].content_format"
+          />
           <p v-else class="notice-content" style="margin: 0">{{ notice.content_preview }}</p>
         </div>
       </article>

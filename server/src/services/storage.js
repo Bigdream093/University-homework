@@ -15,6 +15,7 @@ import {
 // 全盘孤儿扫描（referencedFiles）与按任务精确检查（isFileReferenced）都由这份表生成，防止两套规则漂移。
 // 兼容期内库中旧值是绝对路径、新值是相对键，因此精确检查同时匹配两种形态。
 const REFERENCE_RULES = [
+  { table: 'editor_images', column: 'file_url' },
   { table: 'materials', column: 'file_url' },
   { table: 'submissions', column: 'file_url' },
   { table: 'group_submissions', column: 'file_url' },

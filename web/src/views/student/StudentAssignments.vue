@@ -1,4 +1,5 @@
 <script setup>
+import { markdownSummary } from '../../utils/markdown.js'
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -142,7 +143,10 @@ onUnmounted(() => window.clearInterval(clockTimer))
                 <p
                   style="white-space: pre-wrap; line-height: 1.8; color: #566e69; margin: 0 0 10px"
                 >
-                  {{ assignment.description || '查看作业详情并提交' }}
+                  {{
+                    markdownSummary(assignment.description, assignment.description_format) ||
+                    '查看作业详情并提交'
+                  }}
                 </p>
                 <span class="hint" style="display: block; margin-bottom: 10px"
                   >满分 {{ assignment.total_score }}</span

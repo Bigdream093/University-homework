@@ -16,6 +16,7 @@
     "exceljs": "^4.4.0",
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
+    "markdown-it": "^15.0.1",
     "multer": "^2.0.2",
     "sharp": "^0.35.4"
   },

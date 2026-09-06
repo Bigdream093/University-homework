@@ -6,7 +6,7 @@
    docker-compose.yml
    nginx.conf
    update 文件夹
-   university-homework-1.6.5-linux-amd64.tar
+   university-homework-1.6.6-linux-amd64.tar
    nginx-mohen-1.6.6-linux-amd64.tar
 
    保留 NAS 原来的 .env、data、uploads，不要用本包的 .env 覆盖。
@@ -32,7 +32,7 @@
    程序不会在启动或运行期间自动检查。
 
 补充：
-- 业务镜像仍是1.6.5，属于正常情况；Windows客户端是1.6.6。
+- 业务镜像和 Windows 客户端均为1.6.6。本版新增作业说明、通知和课程问答的 Markdown 图文编辑，支持表格以及选择、粘贴、拖拽上传图片。
 - Mac暂时保留1.6.5，下载DMG后手动替换应用。
 - 直接打开 /update/ 显示403是正常的；请用上面的具体文件地址检查。
 - 不要删除 data、uploads 或数据卷。

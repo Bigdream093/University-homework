@@ -1,3 +1,6 @@
+import { validateEditorImages } from '../services/editorImageAccess.js'
+import { contentFormat } from '../domain/contentFormat.js'
+import { markdownSummary } from '../domain/markdown.js'
 import { db } from '../db.js'
 import { courseAccess, fail, textValue } from './access.js'
 import { isFuture, nowText } from '../utils/time.js'
@@ -54,7 +57,7 @@ export function listNotices(courseId, user, res) {
       content_preview:
         notice.status === 'withdrawn'
           ? '该通知已被教师撤回'
-          : Array.from(notice.content.replace(/\s+/g, ' ')).slice(0, 160).join(''),
+          : markdownSummary(notice.content, notice.content_format),
       is_read: !!notice.first_read_at,
       is_updated:
         notice.status === 'published' &&
@@ -84,6 +87,7 @@ export function getNotice(id, user, res) {
     id: notice.id,
     title: notice.title,
     content: notice.content,
+    content_format: notice.content_format,
     status: notice.status,
     published_at: notice.published_at,
     updated_at: notice.updated_at,
@@ -123,15 +127,17 @@ export function createNotice(courseId, teacherId, body, res) {
   courseAccess(courseId, { id: teacherId, role: 'teacher' }, { write: true })
   const title = textValue(body.title, '通知标题', 200),
     content = textValue(body.content, '通知正文', 50000, false),
+    format = contentFormat(body.content_format),
     status = statusInput(body),
     at = nowText()
   const scheduled = status === 'scheduled' ? String(body.scheduled_at || '') : null
   if (status === 'scheduled' && !isFuture(scheduled))
     fail(400, '定时发布时间必须是有效的未来北京时间')
+  validateEditorImages(content, format, { id: teacherId, role: 'teacher' })
   const id = db.transaction(() => {
     const result = db
       .prepare(
-        'INSERT INTO notices(course_id,teacher_id,title,content,pinned,status,sort_order,scheduled_at,published_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+        'INSERT INTO notices(course_id,teacher_id,title,content,pinned,status,sort_order,scheduled_at,published_at,created_at,updated_at,content_format) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
       )
       .run(
         courseId,
@@ -145,14 +151,11 @@ export function createNotice(courseId, teacherId, body, res) {
         status === 'published' ? at : null,
         at,
         at,
+        format,
       )
-    db.prepare('INSERT INTO notice_revisions VALUES(?,?,?,?,?)').run(
-      result.lastInsertRowid,
-      1,
-      title,
-      content,
-      at,
-    )
+    db.prepare(
+      'INSERT INTO notice_revisions(notice_id,revision,title,content,changed_at,content_format) VALUES(?,?,?,?,?,?)',
+    ).run(result.lastInsertRowid, 1, title, content, at, format)
     return result.lastInsertRowid
   })()
   res.status(201).json(db.prepare('SELECT * FROM notices WHERE id=?').get(id))
@@ -174,11 +177,14 @@ export function updateNotice(id, teacherId, body, res) {
       fail(400, '定时发布时间必须是有效的未来北京时间')
     const title = textValue(body.title ?? notice.title, '通知标题', 200),
       content = textValue(body.content ?? notice.content, '通知正文', 50000, false),
+      format = contentFormat(body.content_format ?? notice.content_format),
       at = nowText()
-    const changed = title !== notice.title || content !== notice.content,
+    validateEditorImages(content, format, { id: teacherId, role: 'teacher' })
+    const changed =
+        title !== notice.title || content !== notice.content || format !== notice.content_format,
       revision = notice.content_revision + (changed ? 1 : 0)
     db.prepare(
-      'UPDATE notices SET title=?,content=?,pinned=?,status=?,scheduled_at=?,published_at=?,content_revision=?,updated_at=? WHERE id=?',
+      'UPDATE notices SET title=?,content=?,pinned=?,status=?,scheduled_at=?,published_at=?,content_revision=?,updated_at=?,content_format=? WHERE id=?',
     ).run(
       title,
       content,
@@ -188,16 +194,13 @@ export function updateNotice(id, teacherId, body, res) {
       notice.published_at || (status === 'published' ? at : null),
       revision,
       at,
+      format,
       id,
     )
     if (changed)
-      db.prepare('INSERT INTO notice_revisions VALUES(?,?,?,?,?)').run(
-        id,
-        revision,
-        title,
-        content,
-        at,
-      )
+      db.prepare(
+        'INSERT INTO notice_revisions(notice_id,revision,title,content,changed_at,content_format) VALUES(?,?,?,?,?,?)',
+      ).run(id, revision, title, content, at, format)
     return db.prepare('SELECT * FROM notices WHERE id=?').get(id)
   })()
   res.json(saved)

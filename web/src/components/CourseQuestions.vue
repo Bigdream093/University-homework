@@ -1,4 +1,7 @@
 <script setup>
+import MarkdownEditor from './MarkdownEditor.vue'
+import MarkdownContent from './MarkdownContent.vue'
+import { editableMarkdown, markdownSummary } from '../utils/markdown.js'
 import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useUserStore } from '../stores/user.js'
@@ -22,6 +25,13 @@ const teacher = computed(() => useUserStore().user?.role === 'teacher'),
   publication = ref(false),
   summary = ref(''),
   publicReply = ref('')
+const composeBusy = ref(false),
+  replyBusy = ref(false),
+  summaryBusy = ref(false),
+  publicReplyBusy = ref(false)
+const anyImageBusy = computed(
+  () => composeBusy.value || replyBusy.value || summaryBusy.value || publicReplyBusy.value,
+)
 const publicCard = useCollapse()
 const hasPublished = computed(
   () => !!detail.value?.publications.some((publication) => publication.status === 'published'),
@@ -62,17 +72,23 @@ function openFromPublic(row) {
 function newQuestion(row = null) {
   editId.value = row?.id || null
   title.value = row?.title || ''
-  content.value = row?.content || ''
+  content.value = editableMarkdown(row?.content, row?.content_format)
   compose.value = true
 }
 async function save() {
+  if (composeBusy.value) return ElMessage.warning('请先完成图片上传')
   try {
     if (editId.value)
-      await api.put('/questions/' + editId.value, { title: title.value, content: content.value })
+      await api.put('/questions/' + editId.value, {
+        title: title.value,
+        content: content.value,
+        content_format: 'markdown',
+      })
     else
       await api.post('/courses/' + props.courseId + '/questions', {
         title: title.value,
         content: content.value,
+        content_format: 'markdown',
       })
     compose.value = false
     await load()
@@ -82,6 +98,7 @@ async function save() {
   }
 }
 async function action(url, body = {}, method = 'post') {
+  if (anyImageBusy.value) return false
   try {
     await api[method]('/questions/' + detail.value.id + url, body)
     await open(detail.value)
@@ -103,7 +120,9 @@ async function publicAction(row, suffix, message) {
   }
 }
 async function sendReply() {
-  if (await action('/replies', { content: reply.value })) reply.value = ''
+  if (replyBusy.value) return ElMessage.warning('请先完成图片上传')
+  if (await action('/replies', { content: reply.value, content_format: 'markdown' }))
+    reply.value = ''
 }
 async function remove() {
   try {
@@ -159,7 +178,14 @@ function publishDialog() {
   publication.value = true
 }
 async function publish() {
-  if (await action('/publish', { summary: summary.value, reply: publicReply.value }))
+  if (summaryBusy.value || publicReplyBusy.value) return ElMessage.warning('请先完成图片上传')
+  if (
+    await action('/publish', {
+      summary: summary.value,
+      reply: publicReply.value,
+      content_format: 'markdown',
+    })
+  )
     publication.value = false
 }
 function switchTab() {
@@ -219,7 +245,7 @@ useRefresh(load)
       <article v-for="(row, index) in rows" :key="row.id" class="assignment-card collapsible-card">
         <div class="card-head" @click="publicCard.toggle(row.id)">
           <span v-if="row.pinned" class="badge" style="background: #e6a23c">置顶</span>
-          <b class="card-title">{{ row.summary }}</b>
+          <b class="card-title">{{ markdownSummary(row.summary, row.content_format) }}</b>
           <span
             v-if="row.status === 'withdrawn'"
             class="badge"
@@ -245,9 +271,10 @@ useRefresh(load)
           <span class="card-chevron">{{ publicCard.isOpen(row.id) ? '收起 ▲' : '展开 ▼' }}</span>
         </div>
         <div v-if="publicCard.isOpen(row.id)" class="card-body">
-          <p style="white-space: pre-wrap; line-height: 1.8; color: #566e69; margin: 0 0 12px">
-            {{ row.reply }}
-          </p>
+          <MarkdownContent :content="row.summary" :format="row.content_format" /><MarkdownContent
+            :content="row.reply"
+            :format="row.content_format"
+          />
           <div v-if="teacher" class="toolbar" style="margin-bottom: 0">
             <el-button @click="openFromPublic(row)">查看原提问</el-button>
             <el-button
@@ -281,22 +308,40 @@ useRefresh(load)
       <span>第{{ page }}页</span>
       <el-button :disabled="rows.length < 20" @click="goToNextPage">下一页</el-button>
     </div>
-    <el-dialog v-model="compose" :title="editId ? '编辑问题' : '提出问题'" width="min(640px,94vw)"
-      ><el-input v-model="title" placeholder="标题" maxlength="200" /><el-input
+    <el-dialog
+      v-model="compose"
+      :title="editId ? '编辑问题' : '提出问题'"
+      width="min(1180px,96vw)"
+      top="3vh"
+      class="markdown-dialog"
+      destroy-on-close
+      :close-on-click-modal="false"
+      :close-on-press-escape="!anyImageBusy"
+      :show-close="!anyImageBusy"
+      ><el-input v-model="title" placeholder="标题" maxlength="200" /><MarkdownEditor
+        v-if="compose"
         v-model="content"
-        type="textarea"
-        :rows="6"
-        placeholder="问题内容"
-        style="margin: 16px 0"
+        :course-id="courseId"
+        label="问题内容 Markdown"
+        @busy="composeBusy = $event"
       />
       <p class="hint">原始内容不会直接公开；教师可以另行整理匿名摘要和答复。</p>
       <template #footer
-        ><el-button type="primary" @click="save">保存</el-button></template
+        ><el-button type="primary" :disabled="composeBusy" @click="save">保存</el-button></template
       ></el-dialog
     >
-    <el-dialog v-model="dialog" :title="detail?.title" width="min(760px,94vw)"
+    <el-dialog
+      v-model="dialog"
+      :title="detail?.title"
+      width="min(1180px,96vw)"
+      top="3vh"
+      class="markdown-dialog"
+      destroy-on-close
+      :close-on-click-modal="false"
+      :close-on-press-escape="!anyImageBusy"
+      :show-close="!anyImageBusy"
       ><template v-if="detail"
-        ><p style="white-space: pre-wrap">{{ detail.content }}</p>
+        ><MarkdownContent :content="detail.content" :format="detail.content_format" />
         <p class="hint">原题与对话仅提问人和教师可见；公开区只展示教师另写的匿名摘要。</p>
         <div class="toolbar">
           <template v-if="!teacher"
@@ -328,15 +373,20 @@ useRefresh(load)
           class="assignment-card"
         >
           <b>{{ replyRecord.author_name }} · {{ replyRecord.created_at }}</b>
-          <p style="white-space: pre-wrap">{{ replyRecord.content }}</p>
+          <MarkdownContent :content="replyRecord.content" :format="replyRecord.content_format" />
         </article>
         <template v-if="!readonly"
-          ><el-input
+          ><MarkdownEditor
+            v-if="dialog"
             v-model="reply"
-            type="textarea"
-            :rows="3"
-            placeholder="私人回复 / 追问"
-          /><el-button type="primary" style="margin-top: 12px" @click="sendReply"
+            :course-id="courseId"
+            label="私人回复 Markdown"
+            @busy="replyBusy = $event"
+          /><el-button
+            type="primary"
+            style="margin-top: 12px"
+            :disabled="replyBusy"
+            @click="sendReply"
             >发送私人回复</el-button
           ></template
         >
@@ -353,8 +403,14 @@ useRefresh(load)
                 >{{ publicationRecord.status === 'published' ? '已公开' : '已撤回' }} ·
                 {{ publicationRecord.created_at }}</b
               >
-              <p>{{ publicationRecord.summary }}</p>
-              <p>{{ publicationRecord.reply }}</p>
+              <MarkdownContent
+                :content="publicationRecord.summary"
+                :format="publicationRecord.content_format"
+              />
+              <MarkdownContent
+                :content="publicationRecord.reply"
+                :format="publicationRecord.content_format"
+              />
             </div>
             <el-button
               v-if="teacher"
@@ -368,16 +424,33 @@ useRefresh(load)
         </article></template
       ></el-dialog
     >
-    <el-dialog v-model="publication" title="另写公开摘要与答复" width="min(640px,94vw)"
+    <el-dialog
+      v-model="publication"
+      title="另写公开摘要与答复"
+      width="min(1180px,96vw)"
+      top="3vh"
+      class="markdown-dialog"
+      destroy-on-close
+      :close-on-click-modal="false"
+      :close-on-press-escape="!anyImageBusy"
+      :show-close="!anyImageBusy"
       ><p>请删除私人信息；公开后已被阅读的内容无法收回。</p>
-      <el-input v-model="summary" type="textarea" :rows="3" placeholder="公开问题摘要" /><el-input
+      <MarkdownEditor
+        v-if="publication"
+        v-model="summary"
+        :course-id="courseId"
+        label="公开问题摘要 Markdown"
+        @busy="summaryBusy = $event"
+      /><MarkdownEditor
+        v-if="publication"
         v-model="publicReply"
-        type="textarea"
-        :rows="5"
-        placeholder="公开答复"
-        style="margin-top: 14px"
+        :course-id="courseId"
+        label="公开答复 Markdown"
+        @busy="publicReplyBusy = $event"
       /><template #footer
-        ><el-button type="primary" @click="publish">向全班公布</el-button></template
+        ><el-button type="primary" :disabled="summaryBusy || publicReplyBusy" @click="publish"
+          >向全班公布</el-button
+        ></template
       ></el-dialog
     >
   </section>

@@ -1,4 +1,5 @@
 <script setup>
+import MarkdownContent from './MarkdownContent.vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api, { messageOf } from '../api/request.js'
@@ -81,9 +82,10 @@ async function moveAssignment(assignment, direction) {
           }}</span>
         </div>
         <div v-if="assignmentCard.isOpen(assignment.id)" class="card-body">
-          <p style="white-space: pre-wrap; line-height: 1.8; color: #566e69; margin: 0 0 10px">
-            {{ assignment.description || '暂无作业说明' }}
-          </p>
+          <MarkdownContent
+            :content="assignment.description || '暂无作业说明'"
+            :format="assignment.description_format"
+          />
           <span class="hint" style="display: block; margin-bottom: 12px"
             >{{ assignment.work_mode === 'group' ? '分组作业' : '个人作业' }} · 满分{{
               assignment.total_score

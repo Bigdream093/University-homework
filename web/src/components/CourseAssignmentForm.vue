@@ -1,4 +1,6 @@
 <script setup>
+import MarkdownEditor from './MarkdownEditor.vue'
+import { editableMarkdown } from '../utils/markdown.js'
 import { reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import api, { messageOf } from '../api/request.js'
@@ -7,6 +9,7 @@ const props = defineProps({ courseId: { type: [String, Number], required: true }
 const emit = defineEmits(['changed'])
 const assignmentDialog = ref(false)
 const editId = ref(null)
+const imageBusy = ref(false)
 const assignmentForm = reactive({
   title: '',
   description: '',
@@ -29,7 +32,7 @@ function openAssignment(assignment) {
     assignment
       ? {
           title: assignment.title,
-          description: assignment.description,
+          description: editableMarkdown(assignment.description, assignment.description_format),
           type: assignment.type,
           deadline: assignment.deadline,
           total_score: assignment.total_score,
@@ -61,6 +64,8 @@ function openAssignment(assignment) {
   assignmentDialog.value = true
 }
 async function saveAssignment() {
+  if (imageBusy.value) return ElMessage.warning('请等待图片上传完成，或处理失败图片')
+  assignmentForm.description_format = 'markdown'
   if (assignmentForm.type === 'document') {
     const parsed = normalizeExtensions(assignmentForm.allowed_extensions)
     if (parsed.error) {
@@ -91,7 +96,13 @@ defineExpose({ open: openAssignment })
   <el-dialog
     v-model="assignmentDialog"
     :title="editId ? '编辑作业' : '创建作业'"
-    width="min(680px,94vw)"
+    width="min(1180px,96vw)"
+    top="3vh"
+    class="markdown-dialog"
+    destroy-on-close
+    :close-on-click-modal="false"
+    :close-on-press-escape="!imageBusy"
+    :show-close="!imageBusy"
     ><el-form label-position="top">
       <el-divider content-position="left">基本信息</el-divider>
       <p v-if="editId" class="hint">
@@ -99,7 +110,12 @@ defineExpose({ open: openAssignment })
       </p>
       <el-form-item label="作业标题"><el-input v-model="assignmentForm.title" /></el-form-item>
       <el-form-item label="作业要求"
-        ><el-input v-model="assignmentForm.description" type="textarea" :rows="4"
+        ><MarkdownEditor
+          v-if="assignmentDialog"
+          v-model="assignmentForm.description"
+          :course-id="courseId"
+          label="作业要求 Markdown"
+          @busy="imageBusy = $event"
       /></el-form-item>
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px">
         <el-form-item label="类型"
@@ -177,8 +193,10 @@ defineExpose({ open: openAssignment })
         >
       </template> </el-form
     ><template #footer
-      ><el-button @click="assignmentDialog = false">取消</el-button
-      ><el-button type="primary" color="#15554e" @click="saveAssignment">保存</el-button></template
+      ><el-button :disabled="imageBusy" @click="assignmentDialog = false">取消</el-button
+      ><el-button type="primary" color="#15554e" :disabled="imageBusy" @click="saveAssignment"
+        >保存</el-button
+      ></template
     ></el-dialog
   >
 </template>

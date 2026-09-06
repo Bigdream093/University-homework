@@ -455,3 +455,15 @@ textarea {
   padding: 14px 18px 16px;
   border-top: 1px dashed var(--line);
 }
+.markdown-dialog.el-dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: 94vh;
+}
+.markdown-dialog > .el-dialog__body {
+  min-height: 0;
+  overflow-y: auto;
+}
+.markdown-dialog > .el-dialog__footer {
+  flex-shrink: 0;
+}

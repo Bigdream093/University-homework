@@ -1,3 +1,5 @@
+import { validateEditorImages } from '../services/editorImageAccess.js'
+import { contentFormat } from '../domain/contentFormat.js'
 import { db } from '../db.js'
 import { courseAccess, assignmentAccess, textValue, fail, requireRole } from './access.js'
 import { nowText, validTime } from '../utils/time.js'
@@ -64,6 +66,7 @@ function assignmentFields(body, current = {}) {
     allowedExtensions ? allowedExtensions.join(',') : null,
     requirePreview,
     previewMax,
+    contentFormat(input.description_format),
   ]
 }
 function publishValidatedAssignment(assignment) {
@@ -102,9 +105,10 @@ export function createAssignment(courseId, user, body) {
       fields = assignmentFields(body),
       status = body.status ?? 'draft'
     if (!['draft', 'published'].includes(status)) fail(400, '新作业状态无效')
+    validateEditorImages(fields[1], fields[13], user)
     const inserted = db
       .prepare(
-        "INSERT INTO assignments(course_id,title,description,type,deadline,total_score,allow_resubmit_count,submission_mode,max_file_mb,work_mode,group_submit_policy,allowed_extensions,require_preview_image,preview_max_count,grade_weight,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,'draft',?,?,?)",
+        "INSERT INTO assignments(course_id,title,description,type,deadline,total_score,allow_resubmit_count,submission_mode,max_file_mb,work_mode,group_submit_policy,allowed_extensions,require_preview_image,preview_max_count,description_format,grade_weight,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,'draft',?,?,?)",
       )
       .run(
         course.id,
@@ -124,9 +128,10 @@ export function updateAssignment(assignmentId, user, body) {
   return db.transaction(() => {
     const assignment = assignmentAccess(assignmentId, user, { write: true }),
       fields = assignmentFields(body, assignment)
+    validateEditorImages(fields[1], fields[13], user)
     const at = nowText()
     db.prepare(
-      'UPDATE assignments SET title=?,description=?,type=?,deadline=?,total_score=?,allow_resubmit_count=?,submission_mode=?,max_file_mb=?,work_mode=?,group_submit_policy=?,allowed_extensions=?,require_preview_image=?,preview_max_count=?,updated_at=? WHERE id=?',
+      'UPDATE assignments SET title=?,description=?,type=?,deadline=?,total_score=?,allow_resubmit_count=?,submission_mode=?,max_file_mb=?,work_mode=?,group_submit_policy=?,allowed_extensions=?,require_preview_image=?,preview_max_count=?,description_format=?,updated_at=? WHERE id=?',
     ).run(...fields, at, assignment.id)
     const cancelled =
       assignment.deadline && !fields[3]

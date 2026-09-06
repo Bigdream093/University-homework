@@ -51,7 +51,7 @@ router.post('/courses/:id/copy', auth, teacherOnly, async (req, res) => {
             .prepare('SELECT * FROM assignments WHERE course_id=?')
             .all(course.id))
             db.prepare(
-              "INSERT INTO assignments(course_id,title,description,type,total_score,allow_resubmit_count,submission_mode,max_file_mb,work_mode,group_submit_policy,allowed_extensions,require_preview_image,preview_max_count,grade_weight,is_final,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?,?)",
+              "INSERT INTO assignments(course_id,title,description,type,total_score,allow_resubmit_count,submission_mode,max_file_mb,work_mode,group_submit_policy,allowed_extensions,require_preview_image,preview_max_count,description_format,grade_weight,is_final,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?,?)",
             ).run(
               newCourseId,
               source.title,
@@ -66,6 +66,7 @@ router.post('/courses/:id/copy', auth, teacherOnly, async (req, res) => {
               source.allowed_extensions,
               Number(source.require_preview_image ?? 0),
               Number(source.preview_max_count ?? 3),
+              source.description_format,
               source.grade_weight ?? 0,
               Number(source.is_final ?? 0),
               source.sort_order,
