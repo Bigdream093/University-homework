@@ -80,7 +80,7 @@ async function main() {
     fs.writeFileSync(path.join(release, 'DEPLOYMENT-VALIDATION.json'), JSON.stringify({
       testedAt: new Date().toISOString(), environment: 'isolated local Docker linux/amd64',
       nasModified: false, productionDataUsed: false, passed,
-      notTested: ['NAS live deployment', 'real PowerPoint clipboard on Windows', 'Windows installed A-to-B upgrade', 'Mac desktop rebuild', '10GB concurrent upload'],
+      notTested: ['NAS live deployment', 'real PowerPoint clipboard on Windows', 'Windows installed A-to-B upgrade', 'Mac installed launch/update on hardware', '10GB concurrent upload'],
     }, null, 2) + '\n')
     console.log(`Passed ${passed.length} deployment checks.`)
   } finally {
