@@ -657,6 +657,53 @@ test('F14 preview images: required, magic-byte validated, counted, replaced on o
   assert.equal(original.status, 200)
   // 图片票据仍绑定签发用户；账号停用后不能继续匿名读取。
   const ticket = await call('alice', 'post', '/previews/view-ticket', { ids: [previews[0].id] })
+  const urls = ticket.tickets[previews[0].id]
+  const ticketThumb = await request(app).get(urls.thumbnail)
+  const ticketOriginal = await request(app).get(urls.file)
+  assert.equal(ticketThumb.status, 200)
+  assert.equal(ticketThumb.headers['content-type'], thumb.headers['content-type'])
+  assert.deepEqual(ticketThumb.body, thumb.body)
+  assert.equal(ticketOriginal.status, 200)
+  assert.equal(
+    ticketOriginal.headers['content-disposition'],
+    original.headers['content-disposition'],
+  )
+  assert.deepEqual(ticketOriginal.body, original.body)
+  const storedPreview = db
+    .prepare('SELECT file_url,thumbnail_url FROM submission_preview_images WHERE id=?')
+    .get(previews[0].id)
+  try {
+    for (const thumbnail of [null, 'missing-thumbnail.jpg']) {
+      db.prepare('UPDATE submission_preview_images SET thumbnail_url=? WHERE id=?').run(
+        thumbnail,
+        previews[0].id,
+      )
+      const directFallback = await request(app)
+        .get(previews[0].thumbnail_url)
+        .set('Authorization', 'Bearer ' + (await login('alice')))
+      const ticketFallback = await request(app).get(urls.thumbnail)
+      for (const response of [directFallback, ticketFallback]) {
+        assert.equal(response.status, 200)
+        assert.match(response.headers['content-type'], /^image\/png/)
+        assert.equal(response.headers['content-disposition'], undefined)
+        assert.equal(response.headers['x-content-type-options'], 'nosniff')
+        assert.deepEqual(response.body, original.body)
+      }
+    }
+    db.prepare('UPDATE submission_preview_images SET thumbnail_url=?,file_url=? WHERE id=?').run(
+      storedPreview.thumbnail_url,
+      'missing-original.png',
+      previews[0].id,
+    )
+    assert.equal((await request(app).get(urls.thumbnail)).status, 200)
+    assert.equal((await request(app).get(urls.file)).status, 404)
+  } finally {
+    db.prepare('UPDATE submission_preview_images SET thumbnail_url=?,file_url=? WHERE id=?').run(
+      storedPreview.thumbnail_url,
+      storedPreview.file_url,
+      previews[0].id,
+    )
+  }
   db.prepare("UPDATE users SET status='inactive' WHERE username='alice'").run()
   const disabledTicket = await request(app).get(ticket.tickets[previews[0].id].thumbnail)
   assert.equal(disabledTicket.status, 401)

@@ -25,6 +25,8 @@ jobs:
       - run: npm ci
       - run: npm run check:runtime
       - run: npm test
+      - run: npm ci --prefix desktop
+      - run: npm test --prefix desktop
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
       - run: docker build -t university-homework:verified .

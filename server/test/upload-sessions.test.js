@@ -19,6 +19,7 @@ const { app } = await import('../src/index.js')
 const { db } = await import('../src/db.js')
 const { processCleanupBatch } = await import('../src/services/storage.js')
 const { resolveUploadPath } = await import('../src/utils/uploadPath.js')
+const { saveMaterialSession } = await import('../src/services/materialService.js')
 after(() => {
   db.close()
   fs.rmSync(directory, { recursive: true, force: true })
@@ -189,6 +190,85 @@ test('资料分片完成：关联正确课程及文件，重复完成只创建�
   assert.equal(download.status, 200)
   assert.deepEqual(download.body, Buffer.from('abcXYZ'))
 })
+
+for (const mode of ['create', 'update'])
+  test(`资料${mode}：完成回调与写入同事务，失败回滚，成功仅调用一次`, async () => {
+    const f = await fixture()
+    const user = { id: f.teacher.id, role: 'teacher' }
+    const originalFile = {
+      storageKey: `material/${f.course.id}-old.zip`,
+      originalname: 'old.zip',
+      size: 3,
+    }
+    const session = { mode, course_id: f.course.id }
+    if (mode === 'update') {
+      session.material_id = saveMaterialSession({
+        session: { ...session, mode: 'create' },
+        user,
+        file: originalFile,
+        metadata: { title: '原资料' },
+      }).id
+    }
+    const before = db.prepare('SELECT * FROM materials WHERE course_id=?').all(f.course.id)
+    const args = {
+      session,
+      user,
+      file: {
+        ...originalFile,
+        storageKey: `material/${f.course.id}-new.zip`,
+        originalname: 'new.zip',
+        size: 6,
+      },
+      metadata: { title: '新资料', description: '说明' },
+    }
+    const rolledBack = new Error('完成回调失败')
+    assert.throws(
+      () =>
+        saveMaterialSession({
+          ...args,
+          onSaved(result) {
+            assert.equal(db.inTransaction, true)
+            assert.equal(
+              db.prepare('SELECT title FROM materials WHERE id=?').get(result.id).title,
+              '新资料',
+            )
+            throw rolledBack
+          },
+        }),
+      (error) => error === rolledBack,
+    )
+    assert.deepEqual(
+      db.prepare('SELECT * FROM materials WHERE course_id=?').all(f.course.id),
+      before,
+    )
+    assert.equal(
+      db
+        .prepare('SELECT count(*) n FROM file_cleanup_jobs WHERE path=?')
+        .get(originalFile.storageKey).n,
+      0,
+    )
+    const completed = []
+    const result = saveMaterialSession({
+      ...args,
+      onSaved(value) {
+        completed.push(value)
+      },
+    })
+    assert.deepEqual(completed, [result])
+    assert.equal(result.title, '新资料')
+    assert.equal(result.file_name, 'new.zip')
+    assert.equal(result.file_size, 6)
+    assert.equal(
+      db.prepare('SELECT count(*) n FROM materials WHERE course_id=?').get(f.course.id).n,
+      1,
+    )
+    assert.equal(
+      db
+        .prepare('SELECT count(*) n FROM file_cleanup_jobs WHERE path=?')
+        .get(originalFile.storageKey).n,
+      mode === 'update' ? 1 : 0,
+    )
+  })
 
 test('资料会话取消：清理已写入文件，不创建资料记录', async () => {
   const f = await fixture(),

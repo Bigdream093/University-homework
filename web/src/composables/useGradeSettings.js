@@ -28,13 +28,7 @@ export function useGradeSettings(assignments) {
     for (const assignment of assignments.value)
       weights[assignment.id] = Number(assignment.grade_weight ?? 0)
     savedConfig.value.weights = { ...weights }
-    Object.assign(draft, {
-      daily_ratio: savedConfig.value.daily_ratio,
-      final_ratio: savedConfig.value.final_ratio,
-      grade_absent_mode: savedConfig.value.grade_absent_mode,
-      final_assignment_id: savedConfig.value.final_assignment_id,
-      weights,
-    })
+    Object.assign(draft, savedConfig.value, { weights })
   }
 
   // —— 设置草稿与脏检查 ——

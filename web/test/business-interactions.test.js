@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ref } from 'vue'
+import { useSummaryWorkspace } from '../src/composables/useSummaryWorkspace.js'
 import { mountView, nodes, textOf, button, click, input, settle } from './helpers/view-harness.js'
 
 const failure = (message, status = 500) => Object.assign(new Error(message), { response: { status, data: { message } } })
@@ -225,9 +226,130 @@ test('看图评分：切换图片、保存并跳过已评记录到下一份未�
   await input(nodes(view.root,'el-input-number')[0],100)
   await click(button(view,'保存并下一份未评分'))
   assert.equal(view.requests[0].body.score,100)
-  assert.equal(saved[1][0].id,12)
-  assert.equal(saved[1][1],true)
+  assert.equal(saved.length,1)
+  assert.equal(saved[0][0].id,12)
+  assert.equal(saved[0][1],true)
   assert.deepEqual(sessionStorage.values(),[])
+})
+
+test('看图评分：最后一份只通知保存一次并关闭', async () => {
+  const saved = [], closed = [], first = row()
+  const view = await mountView('components/GradeWorkspace.vue', {
+    props: { modelValue: true, row: first, assignment: assignment(), rows: [first],
+      onSaved: (...args) => saved.push(args), 'onUpdate:modelValue': value => closed.push(value) },
+    handler: async () => ({}),
+  })
+  await input(nodes(view.root, 'el-input-number')[0], 0)
+  await click(button(view, '保存并下一份未评分'))
+  assert.equal(saved.length, 1)
+  assert.equal(saved[0][0].api_base, first.api_base)
+  assert.deepEqual(closed, [false])
+})
+
+test('看图评分：保存请求未结束时连续点击只提交一次', async () => {
+  let finish
+  const saved = [], first = row()
+  const view = await mountView('components/GradeWorkspace.vue', {
+    props: { modelValue: true, row: first, assignment: assignment(), rows: [first], onSaved: (...args) => saved.push(args) },
+    handler: async () => new Promise(resolve => { finish = resolve }),
+  })
+  await input(nodes(view.root, 'el-input-number')[0], 80)
+  const save = button(view, '保存成绩').props.onClick
+  const pending = save()
+  const repeated = save()
+  await settle()
+  assert.equal(view.requests.length, 1)
+  finish({})
+  await Promise.all([pending, repeated])
+  assert.equal(saved.length, 1)
+})
+
+for (const rejected of [false, true]) test(`看图评分：退回${rejected ? '失败保留输入' : '成功通知并关闭'}，无需填写分数`, async () => {
+  const saved = [], closed = [], first = row()
+  const view = await mountView('components/GradeWorkspace.vue', {
+    props: { modelValue: true, row: first, assignment: assignment(), rows: [first],
+      onSaved: (...args) => saved.push(args), 'onUpdate:modelValue': value => closed.push(value) },
+    handler: async () => { if (rejected) throw failure('退回失败'); return {} },
+  })
+  await input(nodes(view.root, 'el-input').at(-1), '补充图纸')
+  await click(button(view, '退回重做'))
+  assert.equal(view.requests[0].url, '/submissions/10/return')
+  assert.deepEqual(view.requests[0].body, { returned_reason: '补充图纸' })
+  assert.equal(saved.length, rejected ? 0 : 1)
+  assert.deepEqual(closed, rejected ? [] : [false])
+  if (rejected) {
+    assert.equal(nodes(view.root, 'el-input').at(-1).props.modelValue, '补充图纸')
+    assert.ok(sessionStorage.values().some(value => value.includes('补充图纸')))
+    assert.equal(button(view, '退回重做').props.loading, false)
+  } else assert.deepEqual(sessionStorage.values(), [])
+})
+
+for (const count of [0, 1, 200, 201, 401]) test(`预览图：${count}张按200张上限签发，重复ID只请求一次`, async () => {
+  const previews = Array.from({ length: count }, (_, index) => ({ id: index + 1 }))
+  const view = await mountView('views/teacher/SubmissionsView.vue', {
+    handler: async (config, body) => {
+      if (config.url === '/assignments/1') return assignment()
+      if (config.url.endsWith('/submissions')) return [row({ previews }), row({ id: 11, previews: previews.slice(0, 1) })]
+      if (config.url === '/previews/view-ticket') return {
+        tickets: Object.fromEntries(body.ids.slice(0, 200).map(id => [id, { thumbnail: `thumb-${id}`, file: `file-${id}` }])),
+      }
+      throw Error('Unexpected ' + config.url)
+    },
+  })
+  const requests = view.requests.filter(request => request.url === '/previews/view-ticket')
+  assert.equal(requests.length, Math.ceil(count / 200))
+  assert.ok(requests.every(request => request.body.ids.length <= 200))
+  assert.deepEqual(requests.flatMap(request => request.body.ids), previews.map(preview => preview.id))
+  for (const record of nodes(view.root, 'el-table')[0].props.data)
+    for (const preview of record.previews) {
+      assert.equal(preview.thumbnail, `thumb-${preview.id}`)
+      assert.equal(preview.preview, `file-${preview.id}`)
+    }
+  assert.deepEqual(view.errors, [])
+})
+
+test('预览图：旧票据响应不能覆盖刷新后的列表，也不继续请求旧批次', async () => {
+  let releaseOld, ticketCalls = 0, lists = 0
+  const view = await mountView('views/teacher/SubmissionsView.vue', {
+    handler: async (config, body) => {
+      if (config.url === '/assignments/1') return assignment()
+      if (config.url.endsWith('/submissions')) {
+        lists++
+        return [row({ previews: Array.from({ length: lists === 1 ? 201 : 1 }, (_, index) => ({ id: index + 1 })) })]
+      }
+      if (config.url === '/previews/view-ticket') {
+        ticketCalls++
+        if (ticketCalls === 1) return new Promise(resolve => { releaseOld = resolve })
+        return { tickets: { 1: { thumbnail: 'new-thumb', file: 'new-file' } } }
+      }
+      throw Error('Unexpected ' + config.url)
+    },
+  })
+  assert.equal(typeof releaseOld, 'function')
+  await nodes(view.root, 'GradeWorkspace')[0].props.onSaved(row(), true)
+  releaseOld({ tickets: { 1: { thumbnail: 'old-thumb', file: 'old-file' } } })
+  await settle()
+  assert.equal(ticketCalls, 2)
+  assert.equal(nodes(view.root, 'el-table')[0].props.data[0].previews[0].thumbnail, 'new-thumb')
+})
+
+test('汇总工作区：打开和保存后列表保持顺序、姓名与过滤规则', async () => {
+  const first = { id: 1, name: '甲', username: 's1', cells: { 1: row() } }
+  const second = { id: 2, name: '乙', username: 's2', cells: { 1: row({ id: 11, api_base: '/submissions/11', group_name: '第二组' }) } }
+  const students = ref([first, { name: '未交', cells: {} }, second, { cells: { 1: row({ not_assigned: true }) } }])
+  let loads = 0
+  const workspace = useSummaryWorkspace(students, ref([{ id: 1 }]), async () => {
+    loads++
+    students.value[2].cells[1].score = 80
+  }, async () => {}, () => {})
+  await workspace.openWorkspace(students.value[0], { id: 1 })
+  assert.deepEqual(workspace.workspaceRows.value.map(record => [record.api_base, record.name]), [
+    ['/submissions/10', '甲'], ['/submissions/11', '第二组'],
+  ])
+  await workspace.onWorkspaceSaved(second.cells[1], true)
+  assert.equal(loads, 1)
+  assert.equal(workspace.workspaceRow.value.api_base, '/submissions/11')
+  assert.equal(workspace.workspaceRows.value[1].score, 80)
 })
 
 test('汇总页：行内评分失败保留原成绩，不错误更新总分',async()=>{

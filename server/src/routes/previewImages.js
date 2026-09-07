@@ -24,11 +24,19 @@ function findPreview(id, user) {
   if (row.file_state !== 'available' || !row.file_url) fail(404, '预览图已替换或不可用')
   return row
 }
-function deliverPreview(row, res, inline) {
+function deliverPreview(row, res, thumbnail) {
+  if (thumbnail) {
+    const thumb = row.thumbnail_url && resolveUploadPath(row.thumbnail_url, { mustExist: true })
+    if (thumb) {
+      res.setHeader('X-Content-Type-Options', 'nosniff')
+      res.type('image/jpeg')
+      return res.sendFile(thumb)
+    }
+  }
   const file = resolveUploadPath(row.file_url, { mustExist: true })
   if (!file) fail(404, '预览图文件不存在')
   res.setHeader('X-Content-Type-Options', 'nosniff')
-  if (inline) {
+  if (thumbnail) {
     res.type(row.mime_type || 'image/png')
     return res.sendFile(file)
   }
@@ -71,11 +79,7 @@ router.get(
   auth,
   (req, res) => {
     const row = findPreview(idValue(req.params.id), req.user)
-    const thumb = row.thumbnail_url && resolveUploadPath(row.thumbnail_url, { mustExist: true })
-    if (!thumb) return deliverPreview(row, res, true)
-    res.setHeader('X-Content-Type-Options', 'nosniff')
-    res.type('image/jpeg')
-    res.sendFile(thumb)
+    deliverPreview(row, res, true)
   },
 )
 router.get(
@@ -118,14 +122,7 @@ router.get('/preview-files/:ticket', async (req, res, next) => {
     // 票据只解决 <img> 无法携带 Authorization 的问题，不替代实时权限检查。
     // 学生退出课程、账号停用或教师不再拥有课程后，旧票据立即失效。
     const row = findPreview(idValue(payload.previewId), user)
-    if (req.query.mode === 'thumbnail') {
-      const thumb = row.thumbnail_url && resolveUploadPath(row.thumbnail_url, { mustExist: true })
-      if (!thumb) return deliverPreview(row, res, true)
-      res.setHeader('X-Content-Type-Options', 'nosniff')
-      res.type('image/jpeg')
-      return res.sendFile(thumb)
-    }
-    deliverPreview(row, res, false)
+    deliverPreview(row, res, req.query.mode === 'thumbnail')
   } catch (error) {
     if (error.status) next(error)
     else next(Object.assign(new Error('预览凭证已失效，请刷新页面'), { status: 401 }))

@@ -1,159 +1,46 @@
-import test, { after, afterEach } from 'node:test'
+import test, { afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import * as Vue from 'vue'
-import { parse, compileScript } from 'vue/compiler-sfc'
 import { createPinia, setActivePinia } from 'pinia'
-import api, { messageOf } from '../src/api/request.js'
+import api from '../src/api/request.js'
 import { useUserStore } from '../src/stores/user.js'
 import { readUser, readToken, saveSession } from '../src/utils/session.js'
+import { mountView as mountComponent, nodes as findNodes, textOf, settle } from './helpers/view-harness.js'
 
-// 使用真实 Vue 编译与渲染，仅替换浏览器宿主和 UI 控件；模板中的未定义变量必须暴露。
-const renderer = Vue.createRenderer({
-  createElement: (tag) => ({ tag, props: {}, children: [] }),
-  createText: (text) => ({ text }),
-  createComment: (text) => ({ text }),
-  setText: (node, text) => { node.text = text },
-  setElementText: (node, text) => { node.text = text; node.children = [] },
-  patchProp: (node, key, previous, value) => { node.props[key] = value },
-  insert(node, parent, anchor = null) {
-    if (node.parent) {
-      node.parent.children.splice(node.parent.children.indexOf(node), 1)
-    }
-    node.parent = parent
-    const index = anchor ? parent.children.indexOf(anchor) : -1
-    if (index < 0) parent.children.push(node)
-    else parent.children.splice(index, 0, node)
-  },
-  remove(node) {
-    if (node.parent) node.parent.children.splice(node.parent.children.indexOf(node), 1)
-  },
-  parentNode: (node) => node.parent,
-  nextSibling: (node) => node.parent?.children[node.parent.children.indexOf(node) + 1],
-})
-
-const originalAdapter = api.defaults.adapter
-const globalNames = ['localStorage', 'navigator', 'window', 'location']
-const originalGlobals = new Map(
-  globalNames.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]),
-)
-const mountedApps = []
+// 复用现有渲染器；登录专用的宿主环境留在本测试中。
+const originalGlobals = new Map(['navigator', 'location'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]))
 afterEach(() => {
-  for (const app of mountedApps.splice(0)) app.unmount()
-  api.defaults.adapter = originalAdapter
-})
-after(() => {
+  setActivePinia(undefined)
   for (const [name, descriptor] of originalGlobals) {
     if (descriptor) Object.defineProperty(globalThis, name, descriptor)
     else delete globalThis[name]
   }
 })
 
-function compileView(relativePath, dependencies) {
-  const filename = new URL(relativePath, import.meta.url)
-  const { descriptor } = parse(readFileSync(filename, 'utf8'))
-  const { content } = compileScript(descriptor, {
-    id: relativePath,
-    inlineTemplate: true,
-    genDefaultAs: 'component',
-  })
-  const executable = content.replace(
-    /import\s+([\s\S]*?)\s+from\s+['"]([^'"]+)['"];?/g,
-    (statement, bindings, specifier) => {
-      assert.ok(specifier in dependencies, `Missing test dependency: ${specifier}`)
-      const namedStart = bindings.indexOf('{')
-      const declarations = []
-      if (namedStart !== 0) {
-        const defaultName = bindings.split(',')[0].trim()
-        declarations.push(`const ${defaultName} = dependencies[${JSON.stringify(specifier)}].default`)
-      }
-      if (namedStart >= 0) {
-        const named = bindings.slice(namedStart).replace(/\bas\b/g, ':')
-        declarations.push(`const ${named} = dependencies[${JSON.stringify(specifier)}]`)
-      }
-      return declarations.join(';\n') + ';'
-    },
-  )
-  return new Function('dependencies', executable + '\nreturn component')(dependencies)
-}
-
 async function mountView(relativePath, { response = [], userAgent = '', query = {}, failure } = {}) {
-  const storage = new Map()
-  const messages = []
-  const requests = []
-  const navigations = []
-  const errors = []
-  const globals = {
-    localStorage: {
-      getItem: (key) => storage.get(key) ?? null,
-      setItem: (key, value) => storage.set(key, String(value)),
-      removeItem: (key) => storage.delete(key),
+  const requests = [], navigations = []
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { userAgent } })
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: {
+    pathname: '/login', assign: target => navigations.push(target),
+  } })
+  setActivePinia(createPinia())
+  const view = await mountComponent(relativePath.replace('../src/', ''), {
+    handler: async config => {
+      requests.push(config)
+      if (failure) throw { config, response: { status: 401, data: { message: failure } } }
+      return response
     },
-    navigator: { userAgent },
-    window: { dispatchEvent() {}, setTimeout },
-    location: { pathname: '/login', assign: (target) => navigations.push(target) },
-  }
-  for (const [name, value] of Object.entries(globals)) {
-    Object.defineProperty(globalThis, name, { configurable: true, value })
-  }
-  api.defaults.adapter = async (config) => {
-    requests.push(config)
-    if (failure) throw { config, response: { status: 401, data: { message: failure } } }
-    return { data: response, status: 200, statusText: 'OK', headers: {}, config }
-  }
-  const dependencies = {
-    vue: Vue,
-    'vue-router': {
-      useRouter: () => ({ push: (target) => navigations.push(target) }),
-      useRoute: () => ({ query }),
+    dependencies: {
+      'vue-router': { useRouter: () => ({ push: target => navigations.push(target) }), useRoute: () => ({ query }) },
+      '../stores/user.js': { useUserStore },
+      '../../composables/useUpload.js': { newRequestId: () => 'test-request', intentSignature: JSON.stringify },
+      '../../composables/useRefresh.js': { useRefresh: load => Vue.onMounted(load) },
     },
-    'element-plus': {
-      ElMessage: Object.fromEntries(
-        ['success', 'warning', 'error'].map((level) => [level, (text) => messages.push({ level, text })]),
-      ),
-      ElMessageBox: { confirm: async () => {} },
-    },
-    '../stores/user.js': { useUserStore },
-    '../api/request.js': { default: api, messageOf },
-    '../../api/request.js': { default: api, messageOf },
-    '../../composables/useUpload.js': { newRequestId: () => 'test-request', intentSignature: JSON.stringify },
-    '../../composables/useRefresh.js': { useRefresh: (load) => Vue.onMounted(load) },
-  }
-  const pinia = createPinia()
-  setActivePinia(pinia)
-  const app = renderer.createApp(compileView(relativePath, dependencies))
-  app.use(pinia)
-  app.config.errorHandler = (error) => errors.push(error)
-  app.config.warnHandler = () => {}
-  for (const tag of [
-    'el-button', 'el-form', 'el-form-item', 'el-input', 'el-radio-group',
-    'el-radio-button', 'el-dialog', 'el-checkbox', 'router-link',
-  ]) {
-    app.component(tag, {
-      inheritAttrs: false,
-      setup: (props, { attrs, slots }) => () => Vue.h(tag, attrs, [
-        slots.default?.(), slots.footer?.(),
-      ]),
-    })
-  }
-  const root = { children: [] }
-  mountedApps.push(app)
-  app.mount(root)
-  await settle()
-  return { root, errors, messages, requests, navigations }
+  })
+  return { ...view, requests, navigations }
 }
 
-async function settle() {
-  await new Promise((resolve) => setImmediate(resolve))
-  await Vue.nextTick()
-}
-function findNodes(root, tag) {
-  return [root, ...(root.children || []).flatMap((child) => findNodes(child))]
-    .filter((node) => !tag || node.tag === tag)
-}
-function textOf(root) {
-  return (root.text || '') + (root.children || []).map(textOf).join('')
-}
 async function submitLogin(view) {
   const inputs = findNodes(view.root, 'el-input')
   inputs[0].props['onUpdate:modelValue']('20260001')

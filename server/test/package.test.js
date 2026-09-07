@@ -15,8 +15,6 @@ fs.mkdirSync(process.env.UPLOAD_DIR, { recursive: true })
 const { app } = await import('../src/index.js')
 const { db } = await import('../src/db.js')
 const { processCleanupBatch } = await import('../src/services/storage.js')
-const { migrateStorageKeys } = await import('../src/services/storage.js')
-const { resolveUploadPath, toStorageKey } = await import('../src/utils/uploadPath.js')
 
 // 库内 file_url 现为相对存储键：磁盘断言先解析回上传根下的绝对路径。
 const diskPath = (key) => path.join(process.env.UPLOAD_DIR, key)
@@ -26,7 +24,7 @@ after(() => {
   fs.rmSync(dataDir, { recursive: true, force: true })
 })
 
-function getZipBuffer(app, url, token) {
+function getBinary(url, token) {
   return request(app)
     .get(url)
     .set('Authorization', `Bearer ${token}`)
@@ -93,20 +91,20 @@ async function makeAssignment(token, courseId, mode, type = 'document') {
   return res.body.id
 }
 
-test('append mode keeps every uploaded file and the package zip contains all versions', async () => {
+async function submissionFixture(mode, type = 'document') {
   const teacherToken = await teacherLogin()
   const courseId = await makeCourse(teacherToken)
-  await request(app)
-    .post(`/api/courses/${courseId}/students`)
+  await request(app).post(`/api/courses/${courseId}/students`)
     .set('Authorization', `Bearer ${teacherToken}`)
-    .send({ username: '20260001', name: '演示学生' })
-  const assignmentId = await makeAssignment(teacherToken, courseId, 'append')
+    .send({ username: '20260001', name: '演示学生' }).expect(201)
+  const assignmentId = await makeAssignment(teacherToken, courseId, mode, type)
+  const login = await request(app).post('/api/auth/login')
+    .send({ username: '20260001', password: '123456' }).expect(200)
+  return { teacherToken, studentToken: login.body.token, assignmentId }
+}
 
-  const studentLogin = await request(app)
-    .post('/api/auth/login')
-    .send({ username: '20260001', password: '123456' })
-  const studentToken = studentLogin.body.token
-  assert.equal(studentLogin.status, 200)
+test('append mode keeps every uploaded file and the package zip contains all versions', async () => {
+  const { teacherToken, studentToken, assignmentId } = await submissionFixture('append', 'document')
 
   const first = await request(app)
     .post(`/api/assignments/${assignmentId}/submit`)
@@ -141,7 +139,7 @@ test('append mode keeps every uploaded file and the package zip contains all ver
     .all(first.body.id)
   assert.equal(history.filter((row) => row.file_url).length, 2, '历史中应保留两次文件记录')
 
-  const zipRes = await getZipBuffer(app, `/api/assignments/${assignmentId}/package`, teacherToken)
+  const zipRes = await getBinary(`/api/assignments/${assignmentId}/package`, teacherToken)
   assert.equal(zipRes.status, 200)
   assert.match(zipRes.headers['content-type'], /application\/zip/)
   const buffer = zipRes.body
@@ -174,24 +172,13 @@ test('append mode keeps every uploaded file and the package zip contains all ver
     .set('Authorization', `Bearer ${teacherToken}`)
     .send({ kind: 'assignment-package', id: assignmentId })
   assert.equal(ticket.status, 200)
-  const browserZip = await getZipBuffer(app, ticket.body.url)
+  const browserZip = await getBinary(ticket.body.url)
   assert.equal(browserZip.status, 200, '浏览器应直接接收文件流')
   assert.equal(browserZip.body.readUInt32LE(0), 0x04034b50)
 })
 
 test('overwrite mode removes the replaced physical file and zip contains one entry', async () => {
-  const teacherToken = await teacherLogin()
-  const courseId = await makeCourse(teacherToken)
-  await request(app)
-    .post(`/api/courses/${courseId}/students`)
-    .set('Authorization', `Bearer ${teacherToken}`)
-    .send({ username: '20260001', name: '演示学生' })
-  const assignmentId = await makeAssignment(teacherToken, courseId, 'overwrite')
-
-  const studentLogin = await request(app)
-    .post('/api/auth/login')
-    .send({ username: '20260001', password: '123456' })
-  const studentToken = studentLogin.body.token
+  const { teacherToken, studentToken, assignmentId } = await submissionFixture('overwrite', 'document')
 
   const first = await request(app)
     .post(`/api/assignments/${assignmentId}/submit`)
@@ -210,7 +197,7 @@ test('overwrite mode removes the replaced physical file and zip contains one ent
   processCleanupBatch()
   assert.equal(fs.existsSync(diskPath(firstFile)), false, '覆盖模式下旧文件应被删除')
 
-  const zipRes = await getZipBuffer(app, `/api/assignments/${assignmentId}/package`, teacherToken)
+  const zipRes = await getBinary(`/api/assignments/${assignmentId}/package`, teacherToken)
   assert.equal(zipRes.status, 200)
   const names = zipEntryNames(zipRes.body)
   assert.equal(names.length, 1, '覆盖模式下压缩包只应包含最新文件')
@@ -227,19 +214,7 @@ test('package endpoint reports 400 when nobody has submitted', async () => {
 })
 
 test('package zip packs online-only answers as txt entries', async () => {
-  const teacherToken = await teacherLogin()
-  const courseId = await makeCourse(teacherToken)
-  await request(app)
-    .post(`/api/courses/${courseId}/students`)
-    .set('Authorization', `Bearer ${teacherToken}`)
-    .send({ username: '20260001', name: '演示学生' })
-  const assignmentId = await makeAssignment(teacherToken, courseId, 'append', 'online')
-
-  const studentLogin = await request(app)
-    .post('/api/auth/login')
-    .send({ username: '20260001', password: '123456' })
-  assert.equal(studentLogin.status, 200)
-  const studentToken = studentLogin.body.token
+  const { teacherToken, studentToken, assignmentId } = await submissionFixture('append', 'online')
 
   const submit = await request(app)
     .post(`/api/assignments/${assignmentId}/submit`)
@@ -247,7 +222,7 @@ test('package zip packs online-only answers as txt entries', async () => {
     .send({ content: '在线作答内容会打包为txt' })
   assert.equal(submit.status, 201)
 
-  const zipRes = await getZipBuffer(app, `/api/assignments/${assignmentId}/package`, teacherToken)
+  const zipRes = await getBinary(`/api/assignments/${assignmentId}/package`, teacherToken)
   assert.equal(zipRes.status, 200)
   const names = zipEntryNames(zipRes.body)
   assert.equal(names.length, 1, '压缩包应包含一个在线作答条目')
@@ -289,10 +264,113 @@ test('single and assignment packages include source files and preview images', a
     `/api/submissions/${submitted.body.id}/package`,
     `/api/assignments/${created.body.id}/package`,
   ]) {
-    const zip = await getZipBuffer(app, url, teacherToken),
+    const zip = await getBinary(url, teacherToken),
       names = zipEntryNames(zip.body)
     assert.equal(zip.status, 200)
     assert.ok(names.some((name) => name.includes('/附件/')))
     assert.ok(names.some((name) => name.includes('/照片/')))
   }
+})
+
+test('submissions list exposes every append-mode file; first and latest versions are downloadable', async () => {
+  const { teacherToken, studentToken, assignmentId } = await submissionFixture('append', 'document')
+
+  const first = await request(app)
+    .post(`/api/assignments/${assignmentId}/submit`)
+    .set('Authorization', `Bearer ${studentToken}`)
+    .attach('file', Buffer.from('first version'), {
+      filename: '草稿一.zip',
+      contentType: 'application/zip',
+    })
+  assert.equal(first.status, 201)
+  const submissionId = first.body.id
+
+  await request(app)
+    .post(`/api/assignments/${assignmentId}/submit`)
+    .set('Authorization', `Bearer ${studentToken}`)
+    .field('base_version', '1')
+    .attach('file', Buffer.from('second version'), {
+      filename: '补充二.zip',
+      contentType: 'application/zip',
+    })
+  await request(app)
+    .post(`/api/assignments/${assignmentId}/submit`)
+    .set('Authorization', `Bearer ${studentToken}`)
+    .field('base_version', '2')
+    .attach('file', Buffer.from('third version'), {
+      filename: '补充三.zip',
+      contentType: 'application/zip',
+    })
+
+  const list = await request(app)
+    .get(`/api/assignments/${assignmentId}/submissions`)
+    .set('Authorization', `Bearer ${teacherToken}`)
+  assert.equal(list.status, 200)
+  const row = list.body.find((r) => r.username === '20260001')
+  assert.ok(row, '学生行存在')
+  assert.equal(row.files.length, 3, '追加模式下文件列表应有 3 个')
+  assert.ok(
+    row.files.every((f) => f.history_id),
+    '每个文件都有 history_id',
+  )
+  assert.ok(
+    row.files.every((f) => f.file_name.includes('_准时.zip')),
+    '文件名为规范命名',
+  )
+
+  const firstHistoryId = row.files[0].history_id
+  const firstDownload = await getBinary(
+    `/api/submissions/${submissionId}/file?history_id=${firstHistoryId}`,
+    teacherToken,
+  )
+  assert.equal(firstDownload.status, 200)
+  assert.equal(firstDownload.body.toString(), 'first version', '按 history_id 下载到第一个文件')
+
+  const latestDownload = await getBinary(`/api/submissions/${submissionId}/file`, teacherToken)
+  assert.equal(latestDownload.status, 200)
+  assert.equal(latestDownload.body.toString(), 'third version', '不带 history_id 下载到最新文件')
+
+  const invalidDownload = await getBinary(
+    `/api/submissions/${submissionId}/file?history_id=999999`,
+    teacherToken,
+  )
+  assert.equal(invalidDownload.status, 404, '无效 history_id 返回 404')
+})
+
+test('online-content submissions are listed in files and download as txt', async () => {
+  const { teacherToken, studentToken, assignmentId } = await submissionFixture('append', 'online')
+
+  const online = await request(app)
+    .post(`/api/assignments/${assignmentId}/submit`)
+    .set('Authorization', `Bearer ${studentToken}`)
+    .send({ content: '这是我的在线作答第一版' })
+  assert.equal(online.status, 201)
+  const submissionId = online.body.id
+
+  const list = await request(app)
+    .get(`/api/assignments/${assignmentId}/submissions`)
+    .set('Authorization', `Bearer ${teacherToken}`)
+  assert.equal(list.status, 200)
+  const row = list.body.find((r) => r.username === '20260001')
+  assert.ok(row, '学生行存在')
+  assert.equal(row.files.length, 1, '在线作答也应出现在文件列表中')
+  assert.equal(row.files[0].file_name, null, '在线作答无 file_name')
+  assert.equal(row.files[0].content, '这是我的在线作答第一版')
+  assert.ok(row.files[0].history_id)
+
+  const download = await getBinary(
+    `/api/submissions/${submissionId}/file?history_id=${row.files[0].history_id}`,
+    teacherToken,
+  )
+  assert.equal(download.status, 200)
+  assert.match(download.headers['content-type'], /text\/plain/, '在线作答以纯文本返回')
+  assert.equal(download.body.toString(), '这是我的在线作答第一版')
+
+  const latestDownload = await getBinary(`/api/submissions/${submissionId}/file`, teacherToken)
+  assert.equal(latestDownload.status, 200)
+  assert.equal(
+    latestDownload.body.toString(),
+    '这是我的在线作答第一版',
+    '不带 history_id 也返回在线内容',
+  )
 })

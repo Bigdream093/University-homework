@@ -61,6 +61,14 @@ function targetWhere(item) {
   if (item.mode === 'update') return ['kind=? AND material_id=?', ['material', item.materialId]]
   return ['kind=? AND course_id=? AND mode=?', ['material', item.courseId, 'create']]
 }
+function discardSessionFiles(id, reason) {
+  const paths = db
+    .prepare('SELECT temporary_path FROM upload_session_files WHERE session_id=?')
+    .all(id)
+    .map((file) => file.temporary_path)
+  db.prepare('DELETE FROM upload_sessions WHERE id=?').run(id)
+  queueCleanup(paths, reason)
+}
 function discardActive(actor, item) {
   const [where, args] = targetWhere(item),
     rows = db
@@ -69,12 +77,7 @@ function discardActive(actor, item) {
       )
       .all(actor, ...args)
   for (const row of rows) {
-    const paths = db
-      .prepare('SELECT temporary_path FROM upload_session_files WHERE session_id=?')
-      .all(row.id)
-      .map((file) => file.temporary_path)
-    db.prepare('DELETE FROM upload_sessions WHERE id=?').run(row.id)
-    queueCleanup(paths, '放弃的分片上传')
+    discardSessionFiles(row.id, '放弃的分片上传')
   }
 }
 function cleanName(value) {
@@ -461,12 +464,7 @@ export async function completeUploadSession(id, user, metadata) {
 export function cancelUploadSession(id, user) {
   const session = owned(id, user)
   if (session.state === 'succeeded') fail(409, '已完成的上传不能取消')
-  const paths = db
-    .prepare('SELECT temporary_path FROM upload_session_files WHERE session_id=?')
-    .all(session.id)
-    .map((file) => file.temporary_path)
-  db.prepare('DELETE FROM upload_sessions WHERE id=?').run(session.id)
-  queueCleanup(paths, '取消分片上传')
+  discardSessionFiles(session.id, '取消分片上传')
   fs.rmSync(sessionDirectory(session.id), { recursive: true, force: true })
   return { cancelled: true }
 }
@@ -478,12 +476,7 @@ export function purgeUploadSessions() {
     )
     .all()
   for (const row of rows) {
-    const paths = db
-      .prepare('SELECT temporary_path FROM upload_session_files WHERE session_id=?')
-      .all(row.id)
-      .map((file) => file.temporary_path)
-    db.prepare('DELETE FROM upload_sessions WHERE id=?').run(row.id)
-    queueCleanup(paths, '过期分片上传')
+    discardSessionFiles(row.id, '过期分片上传')
     fs.rmSync(sessionDirectory(row.id), { recursive: true, force: true })
   }
   db.prepare(

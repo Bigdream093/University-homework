@@ -41,10 +41,10 @@ export function useSubmissions(route) {
   })
 
   const stats = computed(() => ({
-    all: allRows.value.length,
-    submitted: allRows.value.filter((row) => row.id).length,
-    unsubmitted: allRows.value.filter((row) => !row.id).length,
-    graded: allRows.value.filter((row) => row.status === 'graded').length,
+    all: counts.value.all,
+    submitted: counts.value.all - counts.value.unsubmitted,
+    unsubmitted: counts.value.unsubmitted,
+    graded: counts.value.graded,
   }))
 
   async function load() {
@@ -58,27 +58,32 @@ export function useSubmissions(route) {
       if (sequence !== loadSequence) return
       assignment.value = assignmentResponse.data
       allRows.value = submissionResponse.data
-      await redeemPreviewTickets()
+      await redeemPreviewTickets(sequence)
     } catch (error) {
       if (sequence === loadSequence) ElMessage.error(messageOf(error))
     }
   }
 
   // <img> 不携带登录头：批量换取短期票据 URL 供缩略图/大图加载。
-  async function redeemPreviewTickets() {
+  async function redeemPreviewTickets(sequence) {
     const all = allRows.value.flatMap((row) => row.previews || [])
     if (!all.length) return
     try {
-      const { data } = await api.post('/previews/view-ticket', {
-        ids: all.map((preview) => preview.id),
-      })
-      for (const row of allRows.value) {
-        for (const preview of row.previews || []) {
-          const ticket = data.tickets[preview.id]
-          if (ticket) {
-            preview.thumbnail = ticket.thumbnail
-            preview.preview = ticket.file
-          }
+      const ids = [...new Set(all.map((preview) => preview.id))]
+      const tickets = {}
+      for (let index = 0; index < ids.length; index += 200) {
+        if (sequence !== loadSequence) return
+        const { data } = await api.post('/previews/view-ticket', {
+          ids: ids.slice(index, index + 200),
+        })
+        Object.assign(tickets, data.tickets)
+      }
+      if (sequence !== loadSequence) return
+      for (const preview of all) {
+        const ticket = tickets[preview.id]
+        if (ticket) {
+          preview.thumbnail = ticket.thumbnail
+          preview.preview = ticket.file
         }
       }
     } catch {

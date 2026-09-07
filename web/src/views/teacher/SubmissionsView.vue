@@ -29,10 +29,7 @@ function openWorkspace(row) {
 }
 async function onWorkspaceSaved(row, advance) {
   await load()
-  if (advance) {
-    const fresh = allRows.value.find((candidate) => candidate.api_base === row.api_base)
-    if (fresh) workspaceRow.value = fresh
-  } else if (workspace.value) {
+  if (advance || workspace.value) {
     const fresh = allRows.value.find((candidate) => candidate.api_base === row.api_base)
     if (fresh) workspaceRow.value = fresh
   }

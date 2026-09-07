@@ -62,16 +62,17 @@ export function useUpload() {
     percent.value = 0
     loaded.value = 0
     total.value = null
+    function succeed(result) {
+      state.value = '已保存'
+      pending.value = false
+      sessionStorage.removeItem(slot)
+      return result
+    }
     try {
       if (previous) {
         state.value = '正在查询上次结果'
         const { data } = await api.get(statusUrl + intent.key)
-        if (data.state === 'succeeded') {
-          state.value = '已保存'
-          pending.value = false
-          sessionStorage.removeItem(slot)
-          return data.result
-        }
+        if (data.state === 'succeeded') return succeed(data.result)
         if (data.state === 'processing') throw new Error('服务器仍在处理，请稍后查询/重试')
       }
       const body = new FormData()
@@ -96,10 +97,7 @@ export function useUpload() {
           state.value = percent.value >= 100 ? '正在保存，请勿重复提交' : '正在上传'
         },
       })
-      state.value = '已保存'
-      pending.value = false
-      sessionStorage.removeItem(slot)
-      return data
+      return succeed(data)
     } catch (error) {
       if (isSubmissionConflict(error)) {
         state.value = '提交冲突，请先刷新确认'
@@ -110,12 +108,7 @@ export function useUpload() {
       state.value = '结果待确认，请查询/重试'
       try {
         const { data } = await api.get(statusUrl + intent.key)
-        if (data.state === 'succeeded') {
-          state.value = '已保存'
-          pending.value = false
-          sessionStorage.removeItem(slot)
-          return data.result
-        }
+        if (data.state === 'succeeded') return succeed(data.result)
         if (data.state === 'failed') state.value = '保存失败，可以重试'
       } catch {}
       throw error

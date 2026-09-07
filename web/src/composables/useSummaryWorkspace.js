@@ -12,6 +12,12 @@ export function useSummaryWorkspace(students, assignments, load, redeemTickets, 
       username: cell.group_name || student.username,
     }
   }
+  function rowsForAssignment(assignmentId) {
+    return students.value.flatMap((student) => {
+      const cell = student.cells?.[assignmentId]
+      return cell && !cell.not_assigned && cell.id ? [workspaceRowOf(student, cell)] : []
+    })
+  }
   async function openWorkspace(student, assignment) {
     const cell = student.cells?.[assignment.id]
     if (!cell || cell.not_assigned || !cell.id) return
@@ -23,15 +29,7 @@ export function useSummaryWorkspace(students, assignments, load, redeemTickets, 
     }
     workspaceRow.value = workspaceRowOf(student, cell)
     workspaceAssignment.value = assignment
-    workspaceRows.value = students.value
-      .map((student) => student.cells?.[assignment.id])
-      .filter((cell) => cell && !cell.not_assigned && cell.id)
-      .map((cell) =>
-        workspaceRowOf(
-          students.value.find((student) => student.cells?.[assignment.id] === cell),
-          cell,
-        ),
-      )
+    workspaceRows.value = rowsForAssignment(assignment.id)
     workspace.value = true
   }
   function findCellByApiBase(apiBase) {
@@ -49,15 +47,7 @@ export function useSummaryWorkspace(students, assignments, load, redeemTickets, 
       workspaceRow.value = workspaceRowOf(found.student, found.cell)
       workspaceAssignment.value = found.assignment
       if (advance) {
-        workspaceRows.value = students.value
-          .map((student) => student.cells?.[found.assignment.id])
-          .filter((cell) => cell && !cell.not_assigned && cell.id)
-          .map((cell) =>
-            workspaceRowOf(
-              students.value.find((student) => student.cells?.[found.assignment.id] === cell),
-              cell,
-            ),
-          )
+        workspaceRows.value = rowsForAssignment(found.assignment.id)
       }
     } else {
       workspace.value = false

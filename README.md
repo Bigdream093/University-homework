@@ -136,7 +136,7 @@ Excel 首行为表头，A 列为学号、B 列为姓名，从第二行开始读�
 
 ## 测试与验收
 
-`npm test` 运行后端测试、前端静态检查、组件/工具及桌面逻辑测试。真实浏览器测试单独运行，使用实际 Vue、Element Plus、文件输入、HTTP 上传、浏览器下载和独立数据库；不会修改业务源码或连接现有业务数据库。
+`npm test` 运行后端测试、前端静态检查及组件/工具测试。桌面逻辑测试使用 `npm test --prefix desktop`，首次运行前执行 `npm ci --prefix desktop`。真实浏览器测试单独运行，使用实际 Vue、Element Plus、文件输入、HTTP 上传、浏览器下载和独立数据库；不会修改业务源码或连接现有业务数据库。
 
 ```sh
 npm ci
@@ -148,7 +148,7 @@ npm run test:browser
 
 Docker 构建使用根目录 `package-lock.json` 和 `npm ci` 安装对应 workspace 的依赖。
 
-日常 `npm test` 运行服务端测试及前端静态检查、单元/组件测试；发布验收另运行 `npm run test:browser`。重复的中间层流程已移除：分片协议、完成幂等及资料文件关联由服务端测试负责，客户端响应丢失和暂停取消由前端分片测试负责，真实跨 8 MB 续传保留在浏览器层。详见[测试覆盖分工](docs/test-coverage.md)。
+发布验证分别运行 `npm test`、`npm test --prefix desktop` 和 `npm run test:browser`。分片协议、完成幂等及资料文件关联由服务端测试负责，客户端响应丢失和暂停取消由前端分片测试负责，真实跨 8 MB 续传保留在浏览器层。
 
 其他验收命令：
 

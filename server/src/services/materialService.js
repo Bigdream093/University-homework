@@ -28,8 +28,9 @@ export function saveMaterialSession({ session, user, file, metadata, onSaved }) 
     description = textValue(metadata.description, '资料说明', 20000, false)
   return db.transaction(() => {
     const course = courseAccess(session.course_id, user, { write: true, teacher: true })
+    let id
     if (session.mode === 'create') {
-      const id = db
+      id = db
         .prepare(
           'INSERT INTO materials(course_id,teacher_id,title,description,file_url,file_name,file_size,file_type,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
         )
@@ -44,27 +45,26 @@ export function saveMaterialSession({ session, user, file, metadata, onSaved }) 
           path.extname(file.originalname).slice(1).toLowerCase(),
           nowText(),
         ).lastInsertRowid
-      const result = materialView(id)
-      onSaved?.(result)
-      return result
+    } else {
+      const current = db
+        .prepare('SELECT * FROM materials WHERE id=? AND course_id=?')
+        .get(session.material_id, course.id)
+      if (!current) fail(404, '资料不存在')
+      db.prepare(
+        'UPDATE materials SET title=?,description=?,file_url=?,file_name=?,file_size=?,file_type=? WHERE id=?',
+      ).run(
+        title,
+        description,
+        file.storageKey,
+        safeName(file.originalname),
+        file.size,
+        path.extname(file.originalname).slice(1).toLowerCase(),
+        current.id,
+      )
+      queueCleanup([current.file_url], '资料替换')
+      id = current.id
     }
-    const current = db
-      .prepare('SELECT * FROM materials WHERE id=? AND course_id=?')
-      .get(session.material_id, course.id)
-    if (!current) fail(404, '资料不存在')
-    db.prepare(
-      'UPDATE materials SET title=?,description=?,file_url=?,file_name=?,file_size=?,file_type=? WHERE id=?',
-    ).run(
-      title,
-      description,
-      file.storageKey,
-      safeName(file.originalname),
-      file.size,
-      path.extname(file.originalname).slice(1).toLowerCase(),
-      current.id,
-    )
-    queueCleanup([current.file_url], '资料替换')
-    const result = materialView(current.id)
+    const result = materialView(id)
     onSaved?.(result)
     return result
   })()

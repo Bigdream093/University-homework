@@ -84,6 +84,7 @@ function discardDraft() {
 }
 
 async function persist(kind) {
+  if (saving.value) return false
   if (kind === 'grade') {
     const score = Number(form.score)
     if (
@@ -119,18 +120,14 @@ async function saveAndNext() {
   const position = list.findIndex((row) => row.api_base === props.row.api_base)
   const next =
     list.slice(position + 1).find((row) => row.status === 'submitted') || list[position + 1] || null
-  emit('saved', props.row)
   if (next) emit('saved', next, true)
-  else visible.value = false
-}
-async function submitGrade() {
-  if (await persist('grade')) {
+  else {
     emit('saved', props.row)
     visible.value = false
   }
 }
-async function submitReturn() {
-  if (await persist('return')) {
+async function submit(kind) {
+  if (await persist(kind)) {
     emit('saved', props.row)
     visible.value = false
   }
@@ -211,7 +208,7 @@ function stepImage(delta) {
         </el-form>
         <div class="grade-actions">
           <el-button :disabled="saving" @click="discardDraft">放弃草稿</el-button>
-          <el-button type="warning" :disabled="saving" :loading="saving" @click="submitReturn"
+          <el-button type="warning" :disabled="saving" :loading="saving" @click="submit('return')"
             >退回重做</el-button
           >
         </div>
@@ -221,7 +218,7 @@ function stepImage(delta) {
             color="#15554e"
             :disabled="saving"
             :loading="saving"
-            @click="submitGrade"
+            @click="submit('grade')"
             >保存成绩</el-button
           >
           <el-button type="success" :disabled="saving" :loading="saving" @click="saveAndNext"

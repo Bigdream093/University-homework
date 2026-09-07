@@ -69,9 +69,9 @@ function safePathSegment(value, fallback) {
   return cleaned || fallback
 }
 
-function uniquePath(parent, name, isDirectory = false) {
-  const extension = isDirectory ? '' : path.extname(name)
-  const stem = isDirectory ? name : path.basename(name, extension)
+function uniquePath(parent, name) {
+  const extension = path.extname(name)
+  const stem = path.basename(name, extension)
   let candidate = path.join(parent, name)
   let index = 2
   while (fs.existsSync(candidate)) {
@@ -242,21 +242,20 @@ async function transferFile(record) {
     return downloadView(record)
   } catch (error) {
     record.loaded = fs.existsSync(record.temporaryPath) ? fs.statSync(record.temporaryPath).size : 0
+    let message
     if (record.cancelRequested) {
       record.state = 'cancelled'
-      publishDownload(record, '下载已取消')
-      scheduleDownloadCleanup(record, true)
-      return downloadView(record, '下载已取消')
-    }
-    if (record.pauseRequested) {
+      message = '下载已取消'
+    } else if (record.pauseRequested) {
       record.state = 'paused'
-      publishDownload(record, '下载已暂停')
-      return downloadView(record, '下载已暂停')
+      message = '下载已暂停'
+    } else {
+      record.state = 'failed'
+      message = error.message || '下载失败'
     }
-    record.state = 'failed'
-    publishDownload(record, error.message || '下载失败')
-    scheduleDownloadCleanup(record, true)
-    return downloadView(record, error.message || '下载失败')
+    publishDownload(record, message)
+    if (record.state !== 'paused') scheduleDownloadCleanup(record, true)
+    return downloadView(record)
   } finally {
     record.controller = null
   }

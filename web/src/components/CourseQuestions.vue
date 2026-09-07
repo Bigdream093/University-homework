@@ -78,18 +78,9 @@ function newQuestion(row = null) {
 async function save() {
   if (composeBusy.value) return ElMessage.warning('请先完成图片上传')
   try {
-    if (editId.value)
-      await api.put('/questions/' + editId.value, {
-        title: title.value,
-        content: content.value,
-        content_format: 'html',
-      })
-    else
-      await api.post('/courses/' + props.courseId + '/questions', {
-        title: title.value,
-        content: content.value,
-        content_format: 'html',
-      })
+    const body = { title: title.value, content: content.value, content_format: 'html' }
+    if (editId.value) await api.put('/questions/' + editId.value, body)
+    else await api.post('/courses/' + props.courseId + '/questions', body)
     compose.value = false
     await load()
     if (detail.value && editId.value) await open(detail.value)

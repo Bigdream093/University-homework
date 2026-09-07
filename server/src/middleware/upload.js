@@ -38,6 +38,15 @@ function safeStoredName(originalname) {
   return randomUUID() + ext
 }
 
+function removeStoredFile(_req, file, cb) {
+  const target = file.path
+  delete file.destination
+  delete file.filename
+  delete file.path
+  if (!target) return cb(null)
+  fs.unlink(target, (error) => cb(error?.code === 'ENOENT' ? null : error))
+}
+
 // 作业提交专用：源文件 file（1 个，受作业大小上限约束）+ 预览图 previews（最多 10 张，单张 20M，
 // 必须是真实 JPEG/PNG 且像素不超上限）。魔数与尺寸校验在流式落盘后立即执行。
 export function uploadSubmissionFiles(req, res, next) {
@@ -129,14 +138,7 @@ export function uploadSubmissionFiles(req, res, next) {
         })
         .catch(cb)
     },
-    _removeFile(_req, file, cb) {
-      const target = file.path
-      delete file.destination
-      delete file.filename
-      delete file.path
-      if (!target) return cb(null)
-      fs.unlink(target, (error) => cb(error?.code === 'ENOENT' ? null : error))
-    },
+    _removeFile: removeStoredFile,
   }
   const cleanupAll = () => {
     if (createdPaths.size) queueCleanup([...createdPaths], '上传中断清理')
@@ -200,14 +202,7 @@ export function uploadSingle(req, res, next) {
         )
         .catch(cb)
     },
-    _removeFile(_req, file, cb) {
-      const target = file.path
-      delete file.destination
-      delete file.filename
-      delete file.path
-      if (!target) return cb(null)
-      fs.unlink(target, (error) => cb(error?.code === 'ENOENT' ? null : error))
-    },
+    _removeFile: removeStoredFile,
   }
   req.once('aborted', () => {
     if (stagedPath) queueCleanup([stagedPath], '上传连接中断')
