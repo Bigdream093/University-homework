@@ -94,12 +94,16 @@ async function makeAssignment(token, courseId, mode, type = 'document') {
 async function submissionFixture(mode, type = 'document') {
   const teacherToken = await teacherLogin()
   const courseId = await makeCourse(teacherToken)
-  await request(app).post(`/api/courses/${courseId}/students`)
+  await request(app)
+    .post(`/api/courses/${courseId}/students`)
     .set('Authorization', `Bearer ${teacherToken}`)
-    .send({ username: '20260001', name: '演示学生' }).expect(201)
+    .send({ username: '20260001', name: '演示学生' })
+    .expect(201)
   const assignmentId = await makeAssignment(teacherToken, courseId, mode, type)
-  const login = await request(app).post('/api/auth/login')
-    .send({ username: '20260001', password: '123456' }).expect(200)
+  const login = await request(app)
+    .post('/api/auth/login')
+    .send({ username: '20260001', password: '123456' })
+    .expect(200)
   return { teacherToken, studentToken: login.body.token, assignmentId }
 }
 
@@ -118,6 +122,9 @@ test('append mode keeps every uploaded file and the package zip contains all ver
     .prepare('SELECT file_url FROM submissions WHERE id=?')
     .get(first.body.id).file_url
   assert.ok(fs.existsSync(diskPath(firstFile)))
+  db.prepare(
+    "UPDATE submission_history SET file_name=replace(file_name,'.zip','_准时.zip') WHERE submission_id=?",
+  ).run(first.body.id)
 
   const second = await request(app)
     .post(`/api/assignments/${assignmentId}/submit`)
@@ -146,11 +153,16 @@ test('append mode keeps every uploaded file and the package zip contains all ver
   assert.equal(buffer.readUInt32LE(0), 0x04034b50, 'zip 应以 PK\x03\x04 开头')
   const names = zipEntryNames(buffer)
   assert.equal(names.length, 2, '压缩包应包含两个文件')
-  assert.ok(names.some((name) => name.includes('草稿一.zip') || name.includes('_准时.zip')))
   assert.ok(
-    names.some((name) => name.includes('_准时.zip')),
-    `压缩包条目含中文规范名: ${names.join(', ')}`,
+    names.some((name) => name.endsWith('.zip')),
+    `压缩包包含附件: ${names.join(', ')}`,
   )
+  assert.ok(
+    names.some((name) => name.includes('_20260001_')),
+    `附件按姓名学号命名: ${names.join(', ')}`,
+  )
+  assert.doesNotMatch(names.join('\n'), /_(?:准时|迟交)\./)
+  assert.doesNotMatch(names.join('\n'), /第\d+次_[^/]*_(?:准时|迟交)\//)
 
   const denied = await request(app)
     .get(`/api/assignments/${assignmentId}/package`)
@@ -178,12 +190,18 @@ test('append mode keeps every uploaded file and the package zip contains all ver
 })
 
 test('overwrite mode removes the replaced physical file and zip contains one entry', async () => {
-  const { teacherToken, studentToken, assignmentId } = await submissionFixture('overwrite', 'document')
+  const { teacherToken, studentToken, assignmentId } = await submissionFixture(
+    'overwrite',
+    'document',
+  )
 
   const first = await request(app)
     .post(`/api/assignments/${assignmentId}/submit`)
     .set('Authorization', `Bearer ${studentToken}`)
-    .attach('file', Buffer.from('old'), { filename: '旧版.zip', contentType: 'application/zip' })
+    .attach('file', Buffer.from('old'), {
+      filename: '旧版.zip',
+      contentType: 'application/zip',
+    })
   const firstFile = db
     .prepare('SELECT file_url FROM submissions WHERE id=?')
     .get(first.body.id).file_url
@@ -192,7 +210,10 @@ test('overwrite mode removes the replaced physical file and zip contains one ent
     .post(`/api/assignments/${assignmentId}/submit`)
     .set('Authorization', `Bearer ${studentToken}`)
     .field('base_version', '1')
-    .attach('file', Buffer.from('new'), { filename: '新版.zip', contentType: 'application/zip' })
+    .attach('file', Buffer.from('new'), {
+      filename: '新版.zip',
+      contentType: 'application/zip',
+    })
   assert.equal(second.status, 201)
   processCleanupBatch()
   assert.equal(fs.existsSync(diskPath(firstFile)), false, '覆盖模式下旧文件应被删除')
@@ -258,7 +279,10 @@ test('single and assignment packages include source files and preview images', a
     .post(`/api/assignments/${created.body.id}/submit`)
     .set('Authorization', `Bearer ${token}`)
     .attach('file', Buffer.from('drawing'), { filename: '成果.dwg' })
-    .attach('previews', png, { filename: '总平面图.png', contentType: 'image/png' })
+    .attach('previews', png, {
+      filename: '总平面图.png',
+      contentType: 'image/png',
+    })
   assert.equal(submitted.status, 201, submitted.text)
   for (const url of [
     `/api/submissions/${submitted.body.id}/package`,
@@ -306,7 +330,7 @@ test('submissions list exposes every append-mode file; first and latest versions
     .get(`/api/assignments/${assignmentId}/submissions`)
     .set('Authorization', `Bearer ${teacherToken}`)
   assert.equal(list.status, 200)
-  const row = list.body.find((r) => r.username === '20260001')
+  const row = list.body.rows.find((r) => r.username === '20260001')
   assert.ok(row, '学生行存在')
   assert.equal(row.files.length, 3, '追加模式下文件列表应有 3 个')
   assert.ok(
@@ -314,16 +338,26 @@ test('submissions list exposes every append-mode file; first and latest versions
     '每个文件都有 history_id',
   )
   assert.ok(
-    row.files.every((f) => f.file_name.includes('_准时.zip')),
+    row.files.every(
+      (f) => f.file_name.endsWith('.zip') && !/_(?:准时|迟交)\.zip$/.test(f.file_name),
+    ),
     '文件名为规范命名',
   )
 
   const firstHistoryId = row.files[0].history_id
+  db.prepare('UPDATE submission_history SET file_name=? WHERE id=?').run(
+    row.files[0].file_name.replace(/\.zip$/, '_迟交.zip'),
+    firstHistoryId,
+  )
   const firstDownload = await getBinary(
     `/api/submissions/${submissionId}/file?history_id=${firstHistoryId}`,
     teacherToken,
   )
   assert.equal(firstDownload.status, 200)
+  const encodedName =
+    firstDownload.headers['content-disposition']?.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
+  assert.ok(encodedName, '下载响应提供规范文件名')
+  assert.doesNotMatch(decodeURIComponent(encodedName), /_(?:准时|迟交)\.zip$/)
   assert.equal(firstDownload.body.toString(), 'first version', '按 history_id 下载到第一个文件')
 
   const latestDownload = await getBinary(`/api/submissions/${submissionId}/file`, teacherToken)
@@ -351,7 +385,7 @@ test('online-content submissions are listed in files and download as txt', async
     .get(`/api/assignments/${assignmentId}/submissions`)
     .set('Authorization', `Bearer ${teacherToken}`)
   assert.equal(list.status, 200)
-  const row = list.body.find((r) => r.username === '20260001')
+  const row = list.body.rows.find((r) => r.username === '20260001')
   assert.ok(row, '学生行存在')
   assert.equal(row.files.length, 1, '在线作答也应出现在文件列表中')
   assert.equal(row.files[0].file_name, null, '在线作答无 file_name')

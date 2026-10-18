@@ -1,12 +1,41 @@
 import sanitizeHtml from 'sanitize-html'
+import { httpError } from '../utils/httpError.js'
+import { editorImagePattern } from '@university-homework/domain/editorImagePattern'
+import { summaryText } from '@university-homework/domain/summaryText'
 
-export const editorImagePattern = /^\/api\/editor-images\/([a-f0-9-]{36})$/
+export { editorImagePattern }
 
 const options = {
   allowedTags: [
-    'p', 'br', 'h1', 'h2', 'h3', 'h4', 'strong', 'em', 'u', 's', 'blockquote', 'pre', 'code',
-    'ul', 'ol', 'li', 'a', 'span', 'mark', 'img', 'table', 'colgroup', 'col', 'thead', 'tbody',
-    'tfoot', 'tr', 'th', 'td',
+    'p',
+    'br',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'strong',
+    'em',
+    'u',
+    's',
+    'blockquote',
+    'pre',
+    'code',
+    'ul',
+    'ol',
+    'li',
+    'a',
+    'span',
+    'mark',
+    'img',
+    'table',
+    'colgroup',
+    'col',
+    'thead',
+    'tbody',
+    'tfoot',
+    'tr',
+    'th',
+    'td',
   ],
   allowedAttributes: {
     a: ['href', 'target', 'rel'],
@@ -55,25 +84,27 @@ export function imageIds(content) {
   return ids
 }
 
-export function richTextSummary(content, limit = 160) {
-  const text = sanitizeHtml(sanitizeRichText(content), { allowedTags: [], allowedAttributes: {} })
-  return Array.from(text.replace(/\s+/g, ' ').trim()).slice(0, limit).join('')
+export function richTextSummary(content, limit = 160, alreadySanitized = false) {
+  const safeContent = alreadySanitized ? String(content || '') : sanitizeRichText(content)
+  const text = sanitizeHtml(safeContent, { allowedTags: [], allowedAttributes: {} })
+  return summaryText(text, limit)
 }
 
 // 摘要按格式分流：纯文本直接截断，避免 <、> 被当成 HTML 标签丢弃。
 export function contentSummary(content, format, limit = 160) {
-  if (format !== 'html')
-    return Array.from(String(content || '').replace(/\s+/g, ' ').trim())
-      .slice(0, limit)
-      .join('')
+  if (format !== 'html') return summaryText(content, limit)
   return richTextSummary(content, limit)
 }
 
-export function richTextValue(value, label, max = 50000, required = true) {
-  const content = sanitizeRichText(value)
-  if (content.length > max)
-    throw Object.assign(new Error(`${label}不能超过${max}个字符`), { status: 400 })
-  if (required && !richTextSummary(content, 1))
-    throw Object.assign(new Error(`${label}不能为空`), { status: 400 })
+export function richTextValue(
+  value,
+  label,
+  max = 50000,
+  required = true,
+  alreadySanitized = false,
+) {
+  const content = alreadySanitized ? String(value || '').trim() : sanitizeRichText(value)
+  if (content.length > max) throw httpError(400, `${label}不能超过${max}个字符`)
+  if (required && !richTextSummary(content, 1, true)) throw httpError(400, `${label}不能为空`)
   return content
 }

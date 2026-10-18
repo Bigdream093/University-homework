@@ -1,6 +1,6 @@
 services:
   university-homework:
-    image: university-homework:1.7.2
+    image: university-homework:1.8.0
     pull_policy: never
     container_name: university-homework
     restart: unless-stopped
@@ -25,14 +25,20 @@ services:
       CSP_MODE: enforce
       TZ: Asia/Shanghai
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
       interval: 10s
       timeout: 5s
       start_period: 30s
       retries: 6
 
   nginx:
-    image: nginx:mohen-1.6.6
+    image: nginx:mohen-1.8.0
     pull_policy: never
     container_name: university-homework-nginx
     restart: unless-stopped
@@ -40,7 +46,7 @@ services:
       university-homework:
         condition: service_healthy
     ports:
-      - "${APP_PORT:-34567}:80"
+      - '${APP_PORT:-34567}:80'
     # NAS shared folders may omit the read/execute permissions nginx needs.
     # Fix only the mounted update files on each container start, then launch nginx normally.
     entrypoint:

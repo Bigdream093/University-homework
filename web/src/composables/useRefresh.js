@@ -1,8 +1,15 @@
 import { onMounted, onUnmounted } from 'vue'
 export function useRefresh(load) {
-  let timer
+  let timer, pending
   const refresh = () => {
-    if (!document.hidden) load()
+    if (document.hidden || pending) return pending
+    pending = Promise.resolve()
+      .then(load)
+      .catch(() => {})
+      .finally(() => {
+        pending = null
+      })
+    return pending
   }
   onMounted(() => {
     refresh()

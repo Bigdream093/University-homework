@@ -1,56 +1,140 @@
 <script setup>
 import RichTextContent from '../../components/RichTextContent.vue'
+import StudentDeadlineCard from '../../components/StudentDeadlineCard.vue'
+import StudentSubmissionStatus from '../../components/student/StudentSubmissionStatus.vue'
+import StudentSubmissionEditor from '../../components/student/StudentSubmissionEditor.vue'
+import StudentSubmissionReceipt from '../../components/student/StudentSubmissionReceipt.vue'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api, { messageOf } from '../../api/request.js'
+import { validateStudentPage, validateSubmissionPolicy } from '../../api/contracts.js'
 import SubmissionRecords from '../../components/SubmissionRecords.vue'
+import DownloadTask from '../../components/DownloadTask.vue'
 import ExtensionsPanel from '../../components/ExtensionsPanel.vue'
-import FileDropZone from '../../components/FileDropZone.vue'
-import PreviewImagePicker from '../../components/PreviewImagePicker.vue'
 import { useChunkedUpload } from '../../composables/useChunkedUpload.js'
-import { isSubmissionConflict } from '../../composables/useUpload.js'
+import { useDownload } from '../../composables/useDownload.js'
+import { intentSignature, isSubmissionConflict, newRequestId } from '../../composables/useUpload.js'
 import { createServerClock, deadlineState } from '../../utils/deadline.js'
 import { readUser } from '../../utils/session.js'
+import { DEFAULT_ASSIGNMENT_FILE_MAX_MB } from '@university-homework/domain/limits'
+import {
+  requiredQuestions,
+  requiredAnswerValues,
+  serializeRequiredAnswers,
+  requiredAnswerError,
+} from '@university-homework/domain/requiredAnswers'
 
 const route = useRoute()
 const router = useRouter()
 const assignment = ref({})
 const context = ref({})
 const upload = useChunkedUpload()
+const downloadTask = useDownload()
 const {
   busy: uploadBusy,
   percent: uploadPercent,
   state: uploadState,
+  phase: uploadPhase,
+  canPause: uploadCanPause,
+  canCancel: uploadCanCancel,
   loaded: uploadLoaded,
   total: uploadTotal,
 } = upload
 const canSubmit = computed(
   () =>
     context.value.can_submit &&
-    (assignment.value.allow_resubmit_count === -1 ||
-      (submission.value?.submit_count || 0) < assignment.value.allow_resubmit_count + 1 ||
+    submission.value?.status !== 'graded' &&
+    (!submission.value ||
+      assignment.value.allow_resubmit_count === -1 ||
+      (submission.value?.resubmit_count || 0) < assignment.value.allow_resubmit_count ||
       submission.value?.status === 'returned'),
 )
 const submission = ref(null)
 const content = ref('')
+const answerValues = ref({})
+const questions = computed(() => requiredQuestions(assignment.value.required_answer))
+const answers = computed(() => answerValues.value)
+const pageLoading = ref(true)
+const pageLoaded = ref(false)
+const pageError = ref('')
+const submissionState = ref({ kind: 'idle' })
+const submissionUncertain = computed(() => submissionState.value.kind === 'uncertain')
+const editingSubmission = ref(true)
+const requestReference = ref('')
+const submissionLocked = ref(false)
+const confirming = ref(false)
+const recordsRef = ref(null)
 const file = ref(null)
 const loading = ref(false)
-const history = ref([])
-const historyDialog = ref(false)
 const currentTime = ref(Date.now())
 let serverClock = () => Date.now()
-let clockTimer
-let loadSequence = 0
+let clockTimer,
+  loadSequence = 0,
+  loadController,
+  answerSyncTimer,
+  draftTimer
 let contentBaseline = ''
 let settingContent = false
+let confirmedIntent = null
 
 const submissionDraftKey = (id) => `draft:submission:${readUser()?.id || 'guest'}:${id}`
 const fileDraftKey = (id) => `draft:submission-file:${readUser()?.id || 'guest'}:${id}`
+function readDraft(key) {
+  try {
+    return sessionStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+function writeDraft(key, value) {
+  try {
+    if (value) sessionStorage.setItem(key, value)
+    else sessionStorage.removeItem(key)
+  } catch {}
+}
+function flushAnswerDraft(assignmentId = String(route.params.id)) {
+  clearTimeout(answerSyncTimer)
+  clearTimeout(draftTimer)
+  if (questions.value.length)
+    content.value = serializeRequiredAnswers(assignment.value.required_answer, answerValues.value)
+  writeDraft(
+    submissionDraftKey(assignmentId),
+    content.value === contentBaseline ? '' : content.value,
+  )
+}
+function setRequiredAnswer(id, value) {
+  answerValues.value = { ...answerValues.value, [id]: value }
+  clearTimeout(answerSyncTimer)
+  answerSyncTimer = window.setTimeout(() => flushAnswerDraft(), 350)
+}
 
 const deadline = computed(() => deadlineState(context.value.effective_deadline, currentTime.value))
+const serverLate = ref(null)
+const deadlineView = computed(() => {
+  if (serverLate.value === true) return { ...deadline.value, kind: 'late' }
+  if (serverLate.value === false && deadline.value.kind === 'late')
+    return { ...deadline.value, kind: 'normal', text: `截止：${context.value.effective_deadline}` }
+  return deadline.value
+})
+const submissionStateTitle = computed(
+  () =>
+    ({ uncertain: '提交结果待确认', conflict: '提交状态冲突', failed: '提交未完成' })[
+      submissionState.value.kind
+    ] || '',
+)
+const submissionBlockReason = computed(() => {
+  if (context.value.not_assigned) return '本次作业未安排你参与。'
+  if (assignment.value.course_status === 'archived') return '课程已归档，只能查看提交记录。'
+  if (assignment.value.status !== 'published') return '作业已关闭，暂时不能提交修改。'
+  if (!context.value.can_submit) return '当前账号暂时没有提交权限。'
+  if (submission.value?.status === 'graded') return '作业已完成批改，提交已完成。'
+  if (submission.value?.status !== 'returned')
+    return '已达到允许的自行重交次数；如需修改请联系老师退回。'
+  return '当前暂时不能重新提交，请联系老师确认。'
+})
 const fileSizeLabel = computed(() => {
-  const mb = assignment.value.max_file_mb || 200
+  const mb = assignment.value.max_file_mb || DEFAULT_ASSIGNMENT_FILE_MAX_MB
   return mb >= 1024 ? '1G' : `${mb}M`
 })
 // 作业级后缀名限制：如 ['dwg','zip']；为空表示不限制。
@@ -71,69 +155,98 @@ function fileExtension(name) {
   const match = /\.([a-z0-9]+)$/i.exec(name || '')
   return match ? match[1].toLowerCase() : ''
 }
+function validateSubmissionFile(selected) {
+  const extension = fileExtension(selected?.name)
+  const extensionValid =
+    !selected || !allowedExtensions.value.length || allowedExtensions.value.includes(extension)
+  const sizeValid =
+    !selected ||
+    !assignment.value.max_file_mb ||
+    selected.size <= assignment.value.max_file_mb * 1024 * 1024
+  return { extension, extensionValid, sizeValid }
+}
 
 async function load() {
-  const sequence = ++loadSequence
-  const assignmentId = route.params.id
+  const sequence = ++loadSequence,
+    assignmentId = String(route.params.id)
+  loadController?.abort()
+  loadController = new AbortController()
+  pageLoading.value = true
+  pageError.value = ''
   try {
-    const [assignmentResponse, submissionResponse, contextResponse] = await Promise.all([
-      api.get(`/assignments/${assignmentId}`),
-      api.get(`/assignments/${assignmentId}/my-submission`),
-      api.get(`/assignments/${assignmentId}/submission-context`),
-    ])
+    const { data } = await api.get(`/assignments/${assignmentId}/student-page`, {
+      signal: loadController.signal,
+    })
     if (sequence !== loadSequence) return
-    assignment.value = assignmentResponse.data
-    context.value = contextResponse.data
-    submission.value = submissionResponse.data
+    validateStudentPage(data)
+    const previousSubmission = submission.value
+    const hadLoadedPage = pageLoaded.value
+    assignment.value = data.assignment
+    context.value = data.context
+    submission.value = data.submission
+    if (!submission.value) editingSubmission.value = true
+    else if (
+      !hadLoadedPage ||
+      !previousSubmission ||
+      previousSubmission.status !== submission.value.status ||
+      previousSubmission.submit_count !== submission.value.submit_count
+    )
+      editingSubmission.value = false
     contentBaseline = submission.value?.content || ''
     settingContent = true
-    content.value = sessionStorage.getItem(submissionDraftKey(assignmentId)) ?? contentBaseline
+    content.value = readDraft(submissionDraftKey(assignmentId)) ?? contentBaseline
+    answerValues.value = requiredAnswerValues(assignment.value.required_answer, content.value)
     settingContent = false
     serverClock = createServerClock(assignment.value.server_now)
     currentTime.value = serverClock()
-    const previousFile = sessionStorage.getItem(fileDraftKey(assignmentId))
+    serverLate.value = null
+    pageLoaded.value = true
+    submissionState.value = { kind: 'idle' }
+    requestReference.value = ''
+    confirmedIntent = null
+    const previousFile = readDraft(fileDraftKey(assignmentId))
     if (previousFile && !file.value) {
-      sessionStorage.removeItem(fileDraftKey(assignmentId))
+      writeDraft(fileDraftKey(assignmentId), '')
       ElMessage.warning(`上次未提交的文件“${previousFile}”需要重新选择，在线文字已为你保留。`)
     }
   } catch (error) {
-    if (sequence === loadSequence) ElMessage.error(messageOf(error))
+    if (sequence === loadSequence && error.name !== 'CanceledError')
+      pageError.value = messageOf(error)
+  } finally {
+    if (sequence === loadSequence) pageLoading.value = false
   }
 }
 
-watch(
-  content,
-  (value) => {
-    if (settingContent) return
-    const key = submissionDraftKey(route.params.id)
-    if (value !== contentBaseline) sessionStorage.setItem(key, value)
-    else sessionStorage.removeItem(key)
-  },
-  { flush: 'sync' },
-)
+watch(content, (value) => {
+  if (settingContent || questions.value.length) return
+  clearTimeout(draftTimer)
+  const key = submissionDraftKey(route.params.id)
+  const draft = value === contentBaseline ? '' : value
+  draftTimer = window.setTimeout(() => {
+    writeDraft(key, draft)
+  }, 350)
+})
 
-function resetFileSelection(clearDraft = false) {
+function resetFileSelection(clearDraft = false, assignmentId = String(route.params.id)) {
   file.value = null
-  if (clearDraft) sessionStorage.removeItem(fileDraftKey(route.params.id))
+  if (clearDraft) writeDraft(fileDraftKey(assignmentId), '')
 }
 
 // 点击选择和拖拽 drop 都经 FileDropZone 触发这里，统一做后缀/大小校验。
 function acceptFile(selected) {
   if (!selected) return
-  if (
-    allowedExtensions.value.length &&
-    !allowedExtensions.value.includes(fileExtension(selected.name))
-  ) {
+  const validation = validateSubmissionFile(selected)
+  if (!validation.extensionValid) {
     ElMessage.warning(`本作业只接受后缀名：${extensionLabel.value}`)
     resetFileSelection(true)
     return
   }
-  if (assignment.value.max_file_mb && selected.size > assignment.value.max_file_mb * 1024 * 1024) {
+  if (!validation.sizeValid) {
     ElMessage.warning(`该作业限制单文件不超过 ${fileSizeLabel.value}`)
     resetFileSelection(true)
     return
   }
-  sessionStorage.setItem(fileDraftKey(route.params.id), selected.name)
+  writeDraft(fileDraftKey(route.params.id), selected.name)
 }
 watch(file, acceptFile)
 
@@ -148,43 +261,92 @@ const previewMax = computed(() =>
 const previews = ref([])
 const receipt = ref(null)
 const receiptDialog = ref(false)
-const conflict = ref(false)
 const checklist = computed(() => {
   const items = []
-  if (assignment.value.type !== 'online') {
+  for (const [index, question] of questions.value.entries()) {
+    const filled = !!String(answers.value[question.id] || '').trim()
     items.push({
-      ok: !!file.value,
-      text: file.value ? `已选择源文件（${file.value.name}）` : '尚未选择源文件',
+      ok: filled,
+      text: filled ? `第${index + 1}道必答题目已填写` : `尚未回答第${index + 1}道必答题目`,
     })
-    if (file.value && allowedExtensions.value.length) {
-      const ok = allowedExtensions.value.includes(fileExtension(file.value.name))
-      items.push({
-        ok,
-        text: ok
-          ? `源文件后缀符合要求（.${fileExtension(file.value.name)}）`
-          : `源文件后缀不符，本作业只接受：${extensionLabel.value}`,
-      })
-    }
-    if (file.value && assignment.value.max_file_mb) {
-      const ok = file.value.size <= assignment.value.max_file_mb * 1024 * 1024
-      items.push({
-        ok,
-        text: ok ? `源文件未超过 ${fileSizeLabel.value}` : `源文件超过 ${fileSizeLabel.value} 上限`,
-      })
-    }
+  }
+  if (assignment.value.type !== 'online') {
+    const validation = file.value ? validateSubmissionFile(file.value) : null
+    const error = !file.value
+      ? '尚未选择源文件'
+      : !validation.extensionValid
+        ? `源文件后缀不符，本作业只接受：${extensionLabel.value}`
+        : !validation.sizeValid
+          ? `源文件超过 ${fileSizeLabel.value} 上限`
+          : ''
+    items.push({
+      ok: !error,
+      text: error || '源文件已上传并符合要求',
+    })
   }
   if (requirePreview.value) {
     const count = previews.value.length
     items.push({
       ok: count >= 1 && count <= previewMax.value,
-      text: `已选择 ${count}/${previewMax.value} 张预览图`,
+      text:
+        count === 0
+          ? `尚未选择预览图（最多 ${previewMax.value} 张）`
+          : count > previewMax.value
+            ? `预览图超过最多 ${previewMax.value} 张`
+            : '预览图上传并符合要求',
     })
   }
   return items
 })
 
-async function confirmSubmission() {
-  const isLate = deadline.value.kind === 'late'
+function submissionIntentSignature(assignmentId) {
+  const identify = (selected) =>
+    selected ? { name: selected.name, size: selected.size, modified: selected.lastModified } : null
+  return intentSignature({
+    assignmentId,
+    baseVersion: submission.value?.submit_count || 0,
+    content: content.value,
+    requiredAnswer: assignment.value.required_answer || '',
+    file: identify(file.value),
+    previews: previews.value.map(identify),
+  })
+}
+
+async function refreshSubmissionPolicy(assignmentId, reference) {
+  try {
+    const { data } = await api.get(`/assignments/${assignmentId}/submission-policy`, {
+      headers: { 'X-Client-Reference': reference },
+    })
+    if (String(route.params.id) !== assignmentId) return false
+    validateSubmissionPolicy(data)
+    context.value = {
+      ...context.value,
+      can_submit: data.can_submit,
+      effective_deadline: data.effective_deadline,
+    }
+    serverClock = createServerClock(data.server_now)
+    currentTime.value = serverClock()
+    serverLate.value = Boolean(data.is_late)
+    return Boolean(data.can_submit)
+  } catch (error) {
+    // Older servers can still accept submissions; their transaction remains authoritative.
+    if (![404, 405].includes(error.response?.status)) throw error
+    serverLate.value = deadline.value.kind === 'late'
+    return canSubmit.value
+  }
+}
+
+function failureCategory(error, uncertain) {
+  if (uncertain) return '服务器保存状态尚未确认'
+  const status = error.response?.status
+  if (!status) return '网络连接中断'
+  if (status === 413) return '文件超过作业限制'
+  if (status === 409) return '提交版本冲突'
+  if (status >= 500) return '服务器处理异常'
+  return '提交校验未通过'
+}
+
+async function confirmSubmission(isLate) {
   const appendMode = assignment.value.submission_mode === 'append'
   const replacesFile = !appendMode && Boolean(file.value && submission.value?.file_name)
   const replacesAnswer =
@@ -224,6 +386,15 @@ async function confirmSubmission() {
 }
 
 async function submit() {
+  if (submission.value && !editingSubmission.value) return
+  if (submissionLocked.value || submissionState.value.kind === 'conflict') return
+  const targetAssignmentId = String(route.params.id)
+  flushAnswerDraft(targetAssignmentId)
+  const answerError = requiredAnswerError(assignment.value.required_answer, content.value)
+  if (answerError) {
+    ElMessage.warning(answerError)
+    return
+  }
   if (!file.value && !content.value.trim()) {
     ElMessage.warning('请选择文件或填写在线作答内容')
     return
@@ -233,79 +404,137 @@ async function submit() {
     ElMessage.warning(failing.text)
     return
   }
-  if (!(await confirmSubmission())) return
-
-  if (
-    file.value &&
-    assignment.value.max_file_mb &&
-    file.value.size > assignment.value.max_file_mb * 1024 * 1024
-  ) {
-    ElMessage.warning(`该作业限制单文件不超过 ${fileSizeLabel.value}`)
-    return
-  }
-
-  loading.value = true
+  submissionLocked.value = true
+  confirming.value = true
+  const previousState = submissionState.value.kind
+  let reference = ''
   try {
-    const baseVersion = submission.value?.submit_count || 0
-    const response = {
-      data: await upload.run({
-        kind: 'submission',
-        target: { assignment_id: Number(route.params.id) },
-        metadata: { content: content.value },
-        baseVersion,
-        files: [
-          { role: 'source', file: file.value, order: 0 },
-          ...previews.value.map((preview, index) => ({
-            role: 'preview',
-            file: preview,
-            order: index + 1,
-          })),
-        ],
-        legacy: {
-          url: `/assignments/${route.params.id}/submit`,
-          statusUrl: `/assignments/${route.params.id}/upload-status/`,
-          fields: { content: content.value, base_version: baseVersion },
-          file: file.value,
-          extraFiles: previews.value,
-        },
-      }),
+    const signature = submissionIntentSignature(targetAssignmentId)
+    const sameIntent = confirmedIntent?.signature === signature
+    reference = sameIntent ? confirmedIntent.reference : newRequestId()
+    requestReference.value = reference
+    if (!(await refreshSubmissionPolicy(targetAssignmentId, reference))) {
+      submissionState.value = { kind: 'idle' }
+      await load()
+      ElMessage.warning('作业状态已变化，页面已刷新，请确认当前提交权限。')
+      return
     }
-    receipt.value = response.data
-    receiptDialog.value = true
-    conflict.value = false
-    sessionStorage.removeItem(submissionDraftKey(route.params.id))
-    resetFileSelection(true)
-    previews.value = []
-    await load()
+    if (String(route.params.id) !== targetAssignmentId) return
+    const isLate = serverLate.value ?? deadline.value.kind === 'late'
+    const skipConfirmation =
+      sameIntent &&
+      (previousState === 'uncertain' ||
+        Boolean(confirmedIntent && confirmedIntent.isLate === isLate))
+    if (!skipConfirmation && !(await confirmSubmission(isLate))) return
+    confirmedIntent = { signature, isLate, reference }
+    const fileValidation = validateSubmissionFile(file.value)
+    if (!fileValidation.extensionValid || !fileValidation.sizeValid) {
+      ElMessage.warning(
+        !fileValidation.extensionValid
+          ? `本作业只接受后缀名：${extensionLabel.value}`
+          : `该作业限制单文件不超过 ${fileSizeLabel.value}`,
+      )
+      return
+    }
+    confirming.value = false
+    loading.value = true
+    submissionState.value = { kind: 'idle' }
+    const baseVersion = submission.value?.submit_count || 0
+    const metadata = {
+      content: content.value,
+      answer_question: assignment.value.required_answer || '',
+    }
+    const sourceFile = file.value
+    const previewFiles = previews.value
+    const result = await upload.run({
+      kind: 'submission',
+      target: { assignment_id: Number(targetAssignmentId) },
+      metadata,
+      baseVersion,
+      clientReference: reference,
+      onRequestId: (value) => {
+        requestReference.value = value
+      },
+      files: [
+        { role: 'source', file: sourceFile, order: 0 },
+        ...previewFiles.map((preview, index) => ({
+          role: 'preview',
+          file: preview,
+          order: index + 1,
+        })),
+      ],
+      fallback: {
+        url: `/assignments/${targetAssignmentId}/submit`,
+        statusUrl: `/assignments/${targetAssignmentId}/upload-status/`,
+        fields: { ...metadata, base_version: baseVersion },
+        file: sourceFile,
+        extraFiles: previewFiles,
+      },
+    })
+    submissionState.value = { kind: 'idle' }
+    confirmedIntent = null
+    requestReference.value = ''
+    writeDraft(submissionDraftKey(targetAssignmentId), '')
+    writeDraft(fileDraftKey(targetAssignmentId), '')
+    if (String(route.params.id) === targetAssignmentId) {
+      receipt.value = result
+      receiptDialog.value = true
+      resetFileSelection(false, targetAssignmentId)
+      previews.value = []
+      await load()
+    }
   } catch (error) {
     if (['UPLOAD_PAUSED', 'UPLOAD_CANCELLED'].includes(error.code)) {
-      // Upload controls already display pause/cancellation state.
-    } else if (isSubmissionConflict(error)) conflict.value = true
-    else ElMessage.error(messageOf(error))
+      submissionState.value = { kind: 'idle' }
+    } else if (isSubmissionConflict(error)) {
+      submissionState.value = {
+        kind: 'conflict',
+        category: failureCategory(error, false),
+        message: messageOf(error),
+        reference: requestReference.value || reference,
+      }
+    } else {
+      const uncertain = uploadPhase.value === 'uncertain'
+      const requestId = requestReference.value || reference || newRequestId()
+      requestReference.value = requestId
+      submissionState.value = {
+        kind: uncertain ? 'uncertain' : 'failed',
+        category: failureCategory(error, uncertain),
+        message: uncertain ? uploadState.value : messageOf(error),
+        reference: requestId,
+      }
+    }
   } finally {
     loading.value = false
+    confirming.value = false
+    submissionLocked.value = false
   }
 }
 
-// 冲突后不自动重试：重新拉取最新提交状态，学生已选文件与文字保留，确认后再提交。
+async function copyProblemReference() {
+  if (!requestReference.value) return
+  try {
+    await navigator.clipboard.writeText(requestReference.value)
+    ElMessage.success('编号已复制')
+  } catch {
+    ElMessage.warning('复制失败，请手动选择编号')
+  }
+}
+
+// 冲突后先刷新服务器状态，保留学生已选择的文件和文字。
 async function refreshAfterConflict() {
-  conflict.value = false
+  submissionState.value = { kind: 'idle' }
+  confirmedIntent = null
   await load()
 }
 
-async function showHistory() {
-  if (!submission.value) return
-  try {
-    history.value = (await api.get(submission.value.api_base + '/history')).data
-    historyDialog.value = true
-  } catch (error) {
-    ElMessage.error(messageOf(error))
-  }
+function startHistoryDownload(payload) {
+  downloadTask.start(payload)
 }
 
 function closeReceiptAndShowHistory() {
   receiptDialog.value = false
-  showHistory()
+  recordsRef.value?.open()
 }
 
 function closeReceiptAndReturn() {
@@ -313,18 +542,94 @@ function closeReceiptAndReturn() {
   router.push(`/student/courses/${assignment.value.course_id || ''}`)
 }
 
+function startEditingSubmission() {
+  if (!canSubmit.value || !submission.value) return
+  submissionState.value = { kind: 'idle' }
+  editingSubmission.value = true
+  file.value = null
+  previews.value = []
+}
+
+async function cancelEditingSubmission() {
+  if (!submission.value) return
+  if (hasUnsavedWork()) {
+    try {
+      await ElMessageBox.confirm('放弃这次修改并返回已提交状态？', '取消修改', {
+        confirmButtonText: '放弃修改',
+        cancelButtonText: '继续编辑',
+        type: 'warning',
+      })
+    } catch {
+      return
+    }
+  }
+  const assignmentId = String(route.params.id)
+  writeDraft(submissionDraftKey(assignmentId), '')
+  writeDraft(fileDraftKey(assignmentId), '')
+  resetFileSelection(false, assignmentId)
+  previews.value = []
+  content.value = submission.value.content || ''
+  answerValues.value = requiredAnswerValues(assignment.value.required_answer, content.value)
+  contentBaseline = content.value
+  submissionState.value = { kind: 'idle' }
+  confirmedIntent = null
+  editingSubmission.value = false
+}
+
+function hasUnsavedWork() {
+  const currentContent = questions.value.length
+    ? serializeRequiredAnswers(assignment.value.required_answer, answerValues.value)
+    : content.value
+  return !!file.value || previews.value.length > 0 || currentContent !== contentBaseline
+}
+
+async function allowRouteChange() {
+  if (submissionUncertain.value) {
+    ElMessage.warning('请先查询提交结果，确认服务器是否已保存。')
+    return false
+  }
+  if (submissionLocked.value || uploadBusy.value) {
+    ElMessage.warning('提交正在进行，请等待上传或保存完成。')
+    return false
+  }
+  if (!hasUnsavedWork()) return true
+  flushAnswerDraft()
+  try {
+    await ElMessageBox.confirm(
+      '文字草稿会保留；已选文件和预览图离开后需要重新选择。确定离开？',
+      '离开提交页面',
+      { confirmButtonText: '保留草稿并离开', cancelButtonText: '继续填写', type: 'warning' },
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
 function protectUnsavedWork(event) {
-  if (!file.value && content.value === contentBaseline) return
+  if (!hasUnsavedWork() && !submissionLocked.value && !submissionUncertain.value) return
+  flushAnswerDraft()
   event.preventDefault()
   event.returnValue = ''
 }
 
+onBeforeRouteLeave(allowRouteChange)
+onBeforeRouteUpdate((to, from) => (to.params.id === from.params.id ? true : allowRouteChange()))
+
 watch(
   () => route.params.id,
   () => {
+    pageLoaded.value = false
+    submissionState.value = { kind: 'idle' }
+    requestReference.value = ''
+    confirmedIntent = null
+    assignment.value = {}
+    context.value = {}
+    submission.value = null
     resetFileSelection(false)
     previews.value = []
     receipt.value = null
+    answerValues.value = {}
     load()
   },
 )
@@ -334,31 +639,63 @@ onMounted(() => {
   window.addEventListener('beforeunload', protectUnsavedWork)
   clockTimer = window.setInterval(() => {
     currentTime.value = serverClock()
+    serverLate.value = null
   }, 60_000)
 })
 
 onUnmounted(() => {
   window.clearInterval(clockTimer)
+  clearTimeout(answerSyncTimer)
+  clearTimeout(draftTimer)
+  loadSequence += 1
+  loadController?.abort()
+  if (uploadBusy.value) upload.pause()
   window.removeEventListener('beforeunload', protectUnsavedWork)
 })
 </script>
 
 <template>
   <div>
-    <div class="page-head">
-      <div>
-        <el-button text @click="router.push(`/student/courses/${assignment.course_id || ''}`)"
-          >← 课程作业</el-button
-        >
-        <h1>{{ assignment.title || '作业详情' }}</h1>
-        <p>{{ assignment.course_name }} · 有效截止 {{ context.effective_deadline || '不限' }}</p>
+    <div class="assignment-header">
+      <div class="page-head assignment-heading">
+        <div>
+          <el-button text @click="router.push(`/student/courses/${assignment.course_id || ''}`)"
+            >← 课程作业</el-button
+          >
+          <h1>{{ assignment.title || '作业详情' }}</h1>
+          <p>{{ assignment.course_name }}</p>
+        </div>
       </div>
-      <SubmissionRecords v-if="submission" :api-base="submission.api_base" />
+      <StudentDeadlineCard
+        v-if="pageLoaded && !pageError"
+        class="assignment-deadline"
+        label="截止时间"
+        :deadline="context.effective_deadline || ''"
+      />
+      <div class="assignment-header-tools">
+        <SubmissionRecords
+          v-if="pageLoaded && !pageError"
+          ref="recordsRef"
+          :api-base="submission?.api_base || ''"
+          @download="startHistoryDownload"
+        />
+      </div>
     </div>
 
+    <el-skeleton v-if="pageLoading && !pageLoaded" :rows="8" animated />
     <el-alert
-      v-if="deadline.kind === 'warning'"
-      :title="deadline.text"
+      v-if="pageError"
+      :title="pageError"
+      type="error"
+      show-icon
+      :closable="false"
+      style="margin-bottom: 14px"
+      ><el-button size="small" @click="load">重试</el-button></el-alert
+    >
+
+    <el-alert
+      v-if="pageLoaded && deadlineView.kind === 'warning'"
+      :title="deadlineView.text"
       description="请尽快完成并提交，避免网络或文件上传耗时造成迟交。"
       type="warning"
       show-icon
@@ -366,7 +703,7 @@ onUnmounted(() => {
       style="margin-bottom: 18px"
     />
     <el-alert
-      v-else-if="deadline.kind === 'late'"
+      v-else-if="pageLoaded && deadlineView.kind === 'late'"
       title="作业已超过截止时间"
       description="你仍然可以提交，但本次提交会被标记为迟交，老师可以看到。"
       type="error"
@@ -376,7 +713,7 @@ onUnmounted(() => {
     />
 
     <el-alert
-      v-if="!context.can_submit"
+      v-if="pageLoaded && !context.can_submit"
       :title="
         context.not_assigned
           ? '本次作业未安排你参与'
@@ -398,259 +735,175 @@ onUnmounted(() => {
       </p>
       <p>全组共用提交次数和成果。</p>
     </section>
-    <div class="detail-grid">
+    <div v-if="pageLoaded" class="detail-grid">
       <section class="panel">
-        <span class="badge">{{ assignment.type === 'online' ? '在线作答' : '文件作业' }}</span>
         <h2>作业要求</h2>
         <RichTextContent
           :content="assignment.description || '老师暂未填写详细要求。'"
           :format="assignment.description_format"
         />
+        <p v-if="questions.length" class="hint">
+          本作业设有
+          {{ questions.length }} 道必答题目，请在“提交作业”区域查看题目与答题规范，并逐题填写答案。
+        </p>
         <el-divider />
         <p class="hint">
-          满分 {{ assignment.total_score }} · 允许重交
+          满分 {{ assignment.total_score }} · 允许自行重交
           {{
             assignment.allow_resubmit_count === -1 ? '不限' : `${assignment.allow_resubmit_count}次`
           }}
+          （不含首次提交，教师退回重做另计）
           <template v-if="assignment.type !== 'online'">
             · 单文件不超过 {{ fileSizeLabel }}</template
           >
         </p>
       </section>
 
-      <aside class="panel" :class="{ 'late-submit-panel': deadline.kind === 'late' }">
-        <template v-if="submission">
-          <el-alert
-            v-if="submission.status === 'returned'"
-            title="作业被退回"
-            type="warning"
-            :description="submission.returned_reason"
-            show-icon
-            :closable="false"
-          />
-          <el-alert
-            v-else
-            :title="submission.status === 'graded' ? '老师已完成批改' : '已成功提交'"
-            :type="submission.status === 'graded' ? 'success' : 'info'"
-            :closable="false"
-          />
-          <div style="margin: 16px 0" class="hint">
-            最近提交：{{ submission.submitted_at }}<br /><template v-if="context.group"
-              >实际提交人：{{ submission.submitted_by_name }}（{{
-                submission.submitted_by_username
-              }}）<br
-            /></template>
-            文件：{{ submission.file_name || '在线作答' }}<br />
-            提交次数：{{ submission.submit_count }}
-            <span v-if="submission.is_late" class="late"> · 迟交</span>
-          </div>
-        </template>
-
-        <h3>{{ submission ? '重新提交' : '提交作业' }}</h3>
-        <p v-if="!canSubmit" class="hint">当前不可提交：请检查权限、作业开放状态和剩余次数。</p>
-        <el-alert
-          v-if="submission?.file_name && assignment.type !== 'online'"
-          :title="
-            assignment.submission_mode === 'append'
-              ? '重新提交的文件会作为补充保留，不会覆盖原文件'
-              : '重新提交的新文件会替换上一次文件'
-          "
-          type="warning"
-          show-icon
-          :closable="false"
-          style="margin-bottom: 14px"
+      <aside class="panel" :class="{ 'late-submit-panel': deadlineView.kind === 'late' }">
+        <StudentSubmissionStatus
+          v-if="submission && !editingSubmission"
+          :submission="submission"
+          :context="context"
+          :can-submit="canSubmit"
+          :block-reason="submissionBlockReason"
+          @edit="startEditingSubmission"
         />
-        <el-input
-          v-if="assignment.type === 'online'"
-          v-model="content"
-          :disabled="loading || !canSubmit"
-          type="textarea"
-          :rows="8"
-          placeholder="在此输入作答内容"
-        />
-        <template v-else>
-          <p class="hint" style="margin: 0 0 6px"><b>① 文件区域</b>（源文件）</p>
-          <FileDropZone v-model="file" :disabled="loading || !canSubmit" :accept="acceptAttribute">
-            <br />
-            <span v-if="allowedExtensions.length" class="hint"
-              >本作业只接受后缀名：{{ extensionLabel }}</span
-            >
-            <br v-if="allowedExtensions.length" />
-            <span class="hint"
-              >单文件不超过 {{ fileSizeLabel
-              }}<template v-if="!allowedExtensions.length"
-                >，支持文档、图片、视频、设计源文件和压缩包</template
-              ></span
-            ><br />
-            <span class="hint">提交后将自动规范命名为：姓名_学号_提交时间_准时或迟交.扩展名</span>
-          </FileDropZone>
-          <template v-if="requirePreview">
-            <p class="hint" style="margin: 16px 0 6px">
-              <b>② 图片区域</b>（预览图，老师评分时直接查看）
-            </p>
-            <PreviewImagePicker
-              v-model="previews"
-              :max="previewMax"
-              :disabled="loading || !canSubmit"
-            />
-          </template>
-        </template>
-
-        <div v-if="checklist.length" class="submit-checklist">
-          <p
-            v-for="item in checklist"
-            :key="item.text"
-            class="hint"
-            :class="item.ok ? 'check-ok' : 'check-fail'"
-          >
-            {{ item.ok ? '✓' : '✗' }} {{ item.text }}
-          </p>
-        </div>
-
-        <el-alert
-          v-if="conflict"
-          title="提交冲突：服务器上已有更新的提交记录"
-          type="error"
-          show-icon
-          :closable="false"
-          style="margin-top: 14px"
-        >
-          <p style="margin: 0 0 8px">
-            你已选择的文件和填写的内容都已保留。请先获取最新提交状态并确认，再决定是否提交；不同内容会互相覆盖。
-          </p>
-          <el-button size="small" type="primary" @click="refreshAfterConflict"
-            >获取最新状态</el-button
-          >
-        </el-alert>
-
-        <div v-if="uploadState" style="margin: 14px 0 4px">
-          <el-progress :percentage="uploadPercent" :indeterminate="!uploadTotal && uploadBusy" />
-          <p class="hint" style="margin: 6px 0 0">
-            已传 {{ (uploadLoaded / 1024 / 1024).toFixed(1) }} MB /
-            {{ uploadTotal ? (uploadTotal / 1024 / 1024).toFixed(1) + ' MB' : '总大小待确认' }}
-          </p>
-          <p role="status" style="margin: 4px 0 0">{{ uploadState }}</p>
-          <el-button v-if="uploadBusy" size="small" style="margin-top: 8px" @click="upload.pause"
-            >暂停</el-button
-          >
-          <el-button
-            v-if="uploadState && !uploadState.includes('已保存')"
-            size="small"
-            type="danger"
-            plain
-            style="margin-top: 8px"
-            @click="upload.cancel"
-            >取消上传</el-button
-          >
-        </div>
-        <el-button
-          :type="deadline.kind === 'late' ? 'danger' : 'primary'"
-          :color="deadline.kind === 'late' ? '' : '#15554e'"
-          size="large"
-          style="width: 100%; margin-top: 16px"
+        <StudentSubmissionEditor
+          v-else
+          :assignment="assignment"
+          :submission="submission"
+          :questions="questions"
+          :answers="answers"
+          :content="content"
+          :file="file"
+          :previews="previews"
+          :require-preview="requirePreview"
+          :preview-max="previewMax"
+          :accept-attribute="acceptAttribute"
+          :allowed-extensions="allowedExtensions"
+          :extension-label="extensionLabel"
+          :file-size-label="fileSizeLabel"
+          :checklist="checklist"
+          :submission-state="submissionState"
+          :submission-state-title="submissionStateTitle"
+          :submission-locked="submissionLocked"
+          :submission-uncertain="submissionUncertain"
+          :can-submit="canSubmit"
+          :submission-block-reason="submissionBlockReason"
+          :upload-state="uploadState"
+          :upload-percent="uploadPercent"
+          :upload-total="uploadTotal"
+          :upload-busy="uploadBusy"
+          :upload-can-pause="uploadCanPause"
+          :upload-can-cancel="uploadCanCancel"
+          :upload-loaded="uploadLoaded"
+          :upload-phase="uploadPhase"
           :loading="loading"
-          :disabled="!canSubmit || checklist.some((item) => !item.ok)"
-          @click="submit"
-        >
-          {{
-            uploadState.includes('暂停') || uploadState.includes('保留')
-              ? '继续上传'
-              : uploadState.includes('失败') || uploadState.includes('待确认')
-                ? '查询 / 重试'
-                : deadline.kind === 'late'
-                  ? '仍要迟交'
-                  : '确认提交'
-          }}
-        </el-button>
-        <p class="hint">
-          提交时间和迟交状态以服务器记录为准。上传100%后仍须等待保存。断网或刷新后重新选择相同文件，可从已上传位置继续。
-        </p>
+          :confirming="confirming"
+          :deadline-view="deadlineView"
+          @update:content="content = $event"
+          @update:file="file = $event"
+          @update:previews="previews = $event"
+          @set-answer="setRequiredAnswer"
+          @cancel-edit="cancelEditingSubmission"
+          @submit="submit"
+          @copy-reference="copyProblemReference"
+          @refresh-conflict="refreshAfterConflict"
+          @pause-upload="upload.pause"
+          @cancel-upload="upload.cancel"
+        />
       </aside>
     </div>
 
     <ExtensionsPanel
+      v-if="pageLoaded"
       :key="route.params.id"
       :assignment-id="route.params.id"
-      :can-apply="context.can_submit && !!assignment.deadline"
+      :can-apply="!submissionUncertain && context.can_submit && !!assignment.deadline"
       :readonly="assignment.course_status === 'archived' || assignment.status !== 'published'"
       @changed="load"
     />
-    <router-link to="/help#student-submit">提交、重试与回执说明</router-link>
-    <el-dialog v-model="historyDialog" title="提交历史" width="min(620px,94vw)">
-      <el-timeline>
-        <el-timeline-item
-          v-for="item in history"
-          :key="item.id"
-          :timestamp="item.submitted_at"
-          placement="top"
-        >
-          <b>{{ item.file_name || '在线作答' }}</b>
-          <span v-if="item.is_late" class="late"> · 迟交</span>
-          <p v-if="item.content" class="hint">{{ item.content }}</p>
-        </el-timeline-item>
-      </el-timeline>
-    </el-dialog>
-    <el-dialog v-model="receiptDialog" title="提交成功" width="min(480px,92vw)">
-      <template v-if="receipt">
-        <p class="hint" style="margin-top: 0">回执编号：{{ receipt.receipt_no }}</p>
-        <div class="receipt-grid">
-          <span>提交时间</span><b>{{ receipt.submitted_at }}</b> <span>状态</span
-          ><b :class="receipt.is_late ? 'late' : ''">{{
-            receipt.is_late ? '迟交（老师可见）' : '准时'
-          }}</b>
-          <span>源文件</span><b>{{ receipt.file_name || '在线作答' }}</b>
-          <template v-if="requirePreview"
-            ><span>预览图</span><b>{{ receipt.preview_count }} 张</b></template
-          >
-          <span>提交次数</span><b>第 {{ receipt.submit_count }} 次</b>
-        </div>
-        <el-alert
-          v-if="receipt.is_late"
-          title="本次提交已超过截止时间，系统已标记为迟交，老师可以看到。"
-          type="warning"
-          show-icon
-          :closable="false"
-          style="margin-top: 12px"
-        />
-        <p class="hint" style="margin-bottom: 0">
-          可在"历史与回执"中查看本次回执；如作业被退回，可查看退回原因。
-        </p>
-      </template>
-      <template #footer>
-        <el-button @click="receiptDialog = false">关闭</el-button>
-        <el-button @click="closeReceiptAndShowHistory">查看本次提交</el-button>
-        <el-button type="primary" color="#15554e" @click="closeReceiptAndReturn"
-          >返回课程</el-button
-        >
-      </template>
-    </el-dialog>
+    <div class="submission-help-actions">
+      <router-link class="el-button" to="/help#student-submit"
+        ><span>提交、重试与回执说明</span></router-link
+      >
+    </div>
+    <StudentSubmissionReceipt
+      v-model="receiptDialog"
+      :receipt="receipt"
+      :require-preview="requirePreview"
+      @show-history="closeReceiptAndShowHistory"
+      @return-to-course="closeReceiptAndReturn"
+    />
+    <DownloadTask
+      :tasks="downloadTask.tasks.value"
+      @pause="downloadTask.pause"
+      @resume="downloadTask.resume"
+      @cancel="downloadTask.cancel"
+      @open-folder="downloadTask.openFolder"
+      @dismiss="downloadTask.dismiss"
+    />
   </div>
 </template>
 
 <style scoped>
-.submit-checklist {
-  margin-top: 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 10px 14px;
-  background: #f7fbf9;
-}
-.submit-checklist p {
-  margin: 4px 0;
-}
-.check-ok {
-  color: #2f7d5f;
-}
-.check-fail {
-  color: #bb5a40;
-}
-.receipt-grid {
+.assignment-header {
   display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 8px 18px;
-  margin: 12px 0;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 24px;
+  margin-bottom: 26px;
 }
-.receipt-grid span {
-  color: #7d8d89;
+.assignment-heading {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+.assignment-heading h1 {
+  overflow-wrap: anywhere;
+}
+.assignment-header-tools {
+  grid-column: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+  max-width: 100%;
+}
+.assignment-deadline {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: center;
+  margin-bottom: 0;
+}
+.submission-help-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+.submission-help-actions .el-button {
+  margin: 0;
+  text-decoration: none;
+}
+.detail-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+@media (max-width: 800px) {
+  .assignment-header {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  .assignment-deadline,
+  .assignment-header-tools {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  .assignment-header-tools {
+    align-items: center;
+  }
+  .detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 </style>

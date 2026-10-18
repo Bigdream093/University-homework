@@ -1,10 +1,11 @@
 import { db } from '../db.js'
-import { courseAccess, assignmentAccess, fail, textValue, requireRole } from './access.js'
+import { LIMITS } from '@university-homework/domain/limits'
+import { courseAccess, assignmentAccess, fail, idValue, textValue, requireRole } from './access.js'
 import { nowText } from '../utils/time.js'
 
 function resolveMembers(ids, courseId, except = 0) {
   if (!Array.isArray(ids) || !ids.length) fail(400, '请选择组成员')
-  const result = [...new Set(ids.map(Number))]
+  const result = [...new Set(ids.map((value) => idValue(value, '成员必须是课程中的有效学生')))]
   for (const id of result) {
     if (
       !db
@@ -33,9 +34,9 @@ function saveGroup(courseId, user, body, id) {
       teacher: true,
     }),
     memberIds = resolveMembers(body.member_ids, course.id, id || 0),
-    leader = Number(body.leader_id)
+    leader = idValue(body.leader_id, '组长必须是本组成员')
   if (!memberIds.includes(leader)) fail(400, '组长必须是本组成员')
-  const name = textValue(body.name, '组名', 100)
+  const name = textValue(body.name, '组名', LIMITS.groupName)
   if (
     db
       .prepare('SELECT 1 FROM course_groups WHERE course_id=? AND name=? AND id<>?')
@@ -63,7 +64,7 @@ export function createGroup(courseId, user, body) {
 
 export function updateGroup(groupId, user, body) {
   requireRole(user, 'teacher')
-  return db.transaction(() => saveGroup(groupId, user, body, Number(groupId)))()
+  return db.transaction(() => saveGroup(groupId, user, body, idValue(groupId)))()
 }
 
 export function listCourseGroups(courseId, user) {
@@ -71,23 +72,27 @@ export function listCourseGroups(courseId, user) {
   const groups = db
     .prepare('SELECT * FROM course_groups WHERE course_id=? ORDER BY id')
     .all(course.id)
-    .map((group) => ({
-      ...group,
-      members: db
-        .prepare(
-          'SELECT u.id,u.username,u.name FROM course_group_members m JOIN users u ON u.id=m.student_id WHERE m.course_group_id=? ORDER BY u.id',
-        )
-        .all(group.id),
-    }))
+  const membersByGroup = new Map(groups.map((group) => [group.id, []]))
+  for (const member of db
+    .prepare(
+      'SELECT m.course_group_id,u.id,u.username,u.name FROM course_group_members m JOIN users u ON u.id=m.student_id WHERE m.course_id=? ORDER BY m.course_group_id,u.id',
+    )
+    .all(course.id))
+    membersByGroup.get(member.course_group_id)?.push({
+      id: member.id,
+      username: member.username,
+      name: member.name,
+    })
+  const result = groups.map((group) => ({ ...group, members: membersByGroup.get(group.id) }))
   return user.role === 'teacher'
-    ? groups
-    : groups.filter((group) => group.members.some((member) => member.id === user.id))
+    ? result
+    : result.filter((group) => group.members.some((member) => member.id === user.id))
 }
 
 export function removeGroup(groupId, user) {
   requireRole(user, 'teacher')
   return db.transaction(() => {
-    const group = db.prepare('SELECT * FROM course_groups WHERE id=?').get(groupId)
+    const group = db.prepare('SELECT * FROM course_groups WHERE id=?').get(idValue(groupId))
     if (!group) fail(404, '小组不存在')
     courseAccess(group.course_id, user, { write: true })
     db.prepare('DELETE FROM course_groups WHERE id=?').run(group.id)
@@ -97,17 +102,17 @@ export function removeGroup(groupId, user) {
 
 export function listAssignmentGroups(assignmentId, user) {
   const assignment = assignmentAccess(assignmentId, user)
-  const rows = db
+  const groups = db
     .prepare('SELECT * FROM assignment_groups WHERE assignment_id=? ORDER BY id')
     .all(assignment.id)
-    .map((group) => ({
-      ...group,
-      members: db
-        .prepare(
-          'SELECT student_id id,name_snapshot name,username_snapshot username FROM assignment_group_members WHERE assignment_group_id=?',
-        )
-        .all(group.id),
-    }))
+  const membersByGroup = new Map(groups.map((group) => [group.id, []]))
+  for (const member of db
+    .prepare(
+      'SELECT assignment_group_id,student_id id,name_snapshot name,username_snapshot username FROM assignment_group_members WHERE assignment_id=? ORDER BY rowid',
+    )
+    .all(assignment.id))
+    membersByGroup.get(member.assignment_group_id)?.push(member)
+  const rows = groups.map((group) => ({ ...group, members: membersByGroup.get(group.id) }))
   return user.role === 'teacher'
     ? rows
     : rows.filter((group) => group.members.some((member) => member.id === user.id))
@@ -116,10 +121,10 @@ export function listAssignmentGroups(assignmentId, user) {
 export function setGroupSubmitter(groupId, user, submitter) {
   requireRole(user, 'teacher')
   return db.transaction(() => {
-    const group = db.prepare('SELECT * FROM assignment_groups WHERE id=?').get(groupId)
+    const group = db.prepare('SELECT * FROM assignment_groups WHERE id=?').get(idValue(groupId))
     if (!group) fail(404, '分组不存在')
     const assignment = assignmentAccess(group.assignment_id, user, { write: true }),
-      submitterId = Number(submitter)
+      submitterId = idValue(submitter, '提交人必须是当前在课的快照成员')
     if (
       !db
         .prepare(
@@ -143,7 +148,9 @@ export function snapshotGroups(assignmentId, user, selectedGroupIds) {
       assignment.work_mode !== 'group'
     )
       fail(400, '仅未发布的分组作业草稿可以配置快照')
-    const groupIds = [...new Set((selectedGroupIds || []).map(Number))]
+    const groupIds = [
+      ...new Set((selectedGroupIds || []).map((value) => idValue(value, '小组不属于本课程'))),
+    ]
     if (!groupIds.length) fail(400, '请选择小组')
     db.prepare('DELETE FROM assignment_groups WHERE assignment_id=?').run(assignment.id)
     for (const groupId of groupIds) {

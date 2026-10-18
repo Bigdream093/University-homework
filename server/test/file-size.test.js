@@ -57,14 +57,18 @@ test('assignment accepts seven file-size presets and rejects unsupported values'
   const courseId = await makeCourse(teacherToken)
   for (const limit of [10, 20, 50, 100, 200, 500, 1024]) {
     await t.test(`accepts ${limit} MiB`, async () => {
-      const response = await makeAssignment(teacherToken, courseId, { max_file_mb: limit })
+      const response = await makeAssignment(teacherToken, courseId, {
+        max_file_mb: limit,
+      })
       assert.equal(response.status, 201, response.text)
       assert.equal(response.body.max_file_mb, limit)
     })
   }
   for (const limit of [30, 300]) {
     await t.test(`rejects ${limit} MiB`, async () => {
-      const response = await makeAssignment(teacherToken, courseId, { max_file_mb: limit })
+      const response = await makeAssignment(teacherToken, courseId, {
+        max_file_mb: limit,
+      })
       assert.equal(response.status, 400)
       assert.match(response.body.message, /文件大小上限/)
     })
@@ -78,7 +82,9 @@ test('student upload over the assignment limit is rejected with no record and no
     .post(`/api/courses/${courseId}/students`)
     .set('Authorization', `Bearer ${teacherToken}`)
     .send({ username: '20260001', name: '演示学生' })
-  const assignment = await makeAssignment(teacherToken, courseId, { max_file_mb: 100 })
+  const assignment = await makeAssignment(teacherToken, courseId, {
+    max_file_mb: 100,
+  })
   const assignmentId = assignment.body.id
 
   const studentLogin = await request(app)
@@ -90,8 +96,11 @@ test('student upload over the assignment limit is rejected with no record and no
   const stagedFiles = () => {
     const directory = path.join(process.env.UPLOAD_DIR, '.staging')
     return fs.existsSync(directory)
-      ? fs.readdirSync(directory, { recursive: true, withFileTypes: true })
-          .filter((entry) => entry.isFile()).map((entry) => path.join(entry.parentPath, entry.name)).sort()
+      ? fs
+          .readdirSync(directory, { recursive: true, withFileTypes: true })
+          .filter((entry) => entry.isFile())
+          .map((entry) => path.join(entry.parentPath, entry.name))
+          .sort()
       : []
   }
   const stagingBefore = stagedFiles()
@@ -105,9 +114,23 @@ test('student upload over the assignment limit is rejected with no record and no
     })
   assert.equal(over.status, 400)
   assert.match(over.body.message, /100M/)
-  assert.equal(db.prepare('SELECT count(*) n FROM submissions WHERE assignment_id=?').get(assignmentId).n, 0)
-  assert.equal(db.prepare('SELECT count(*) n FROM submission_history h JOIN submissions s ON s.id=h.submission_id WHERE s.assignment_id=?').get(assignmentId).n, 0)
-  assert.equal(db.prepare('SELECT count(*) n FROM submission_receipts WHERE assignment_id=?').get(assignmentId).n, 0)
+  assert.equal(
+    db.prepare('SELECT count(*) n FROM submissions WHERE assignment_id=?').get(assignmentId).n,
+    0,
+  )
+  assert.equal(
+    db
+      .prepare(
+        'SELECT count(*) n FROM submission_history h JOIN submissions s ON s.id=h.submission_id WHERE s.assignment_id=?',
+      )
+      .get(assignmentId).n,
+    0,
+  )
+  assert.equal(
+    db.prepare('SELECT count(*) n FROM submission_receipts WHERE assignment_id=?').get(assignmentId)
+      .n,
+    0,
+  )
   assert.deepEqual(db.pragma('foreign_key_check'), [])
   assert.deepEqual(stagedFiles(), stagingBefore, '超限请求结束后暂存文件必须恢复原状')
 
@@ -123,12 +146,12 @@ test('student upload over the assignment limit is rejected with no record and no
   const list = await request(app)
     .get(`/api/assignments/${assignmentId}/submissions`)
     .set('Authorization', `Bearer ${teacherToken}`)
-  const row = list.body.find((r) => r.username === '20260001')
+  const row = list.body.rows.find((r) => r.username === '20260001')
   assert.equal(row.submit_count, 1, '超限上传不计入提交次数')
   assert.equal(
-    row.file_name.includes('正常.pdf') || row.file_name.includes('_准时.pdf'),
+    row.file_name.endsWith('.pdf') && !/_(?:准时|迟交)\.pdf$/.test(row.file_name),
     true,
-    '提交的是限制内的文件',
+    '提交文件使用规范名，迟交状态单独记录',
   )
 })
 
@@ -149,6 +172,9 @@ test('assignment without max_file_mb keeps the default fallback and accepts norm
   const submit = await request(app)
     .post(`/api/assignments/${assignment.body.id}/submit`)
     .set('Authorization', `Bearer ${studentToken}`)
-    .attach('file', Buffer.from('ok'), { filename: '小文件.zip', contentType: 'application/zip' })
+    .attach('file', Buffer.from('ok'), {
+      filename: '小文件.zip',
+      contentType: 'application/zip',
+    })
   assert.equal(submit.status, 201)
 })

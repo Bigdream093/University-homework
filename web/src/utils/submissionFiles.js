@@ -1,3 +1,6 @@
+import { normalizeSubmissionFileName } from '@university-homework/domain/submissionFilename'
+export { normalizeSubmissionFileName }
+
 function safeName(value) {
   return (
     String(value || '')
@@ -9,6 +12,8 @@ function safeName(value) {
 }
 
 export function fileNameFor(row, source) {
+  if (row.kind === 'group' || row.assignment_group_id)
+    return normalizeSubmissionFileName(source.file_name || '作业文件')
   const [datePart = '', timePart = ''] = String(source.submitted_at || '').split(' ')
   const [, month = '', day = ''] = datePart.split('-')
   const [hour = '', minute = ''] = timePart.split(':')
@@ -16,10 +21,10 @@ export function fileNameFor(row, source) {
   const rawName = source.file_name || ''
   const dot = rawName.lastIndexOf('.')
   const extension = dot > 0 ? rawName.slice(dot + 1) || 'bin' : 'txt'
-  return `${safeName(row.name)}_${safeName(row.username)}_${timestamp}_${source.is_late ? '迟交' : '准时'}.${extension}`
+  return `${safeName(row.name)}_${safeName(row.username)}_${timestamp}.${extension}`
 }
 
-export function rowFiles(row) {
+function rowFiles(row) {
   if (row.files?.length) return row.files
   if (row.file_name)
     return [
@@ -42,4 +47,15 @@ export function rowFiles(row) {
         },
       ]
     : []
+}
+
+export function sourceFilesOf(row) {
+  return rowFiles(row).filter((file) => file.file_name)
+}
+
+// 有学号与姓名的行按规范命名展示，其余退回原始文件名（含清理后的遗留迟交后缀）。
+export function displayFileName(row, file) {
+  return row?.name && row?.username
+    ? fileNameFor(row, file)
+    : normalizeSubmissionFileName(file.file_name)
 }

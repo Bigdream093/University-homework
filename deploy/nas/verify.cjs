@@ -7,18 +7,26 @@ const assert = require('node:assert/strict')
 const YAML = require('../../desktop/node_modules/yaml')
 
 const root = path.resolve(__dirname, '../..')
-const release = path.join(root, 'release/1.7.2')
+const release = path.join(root, 'release/1.8.0')
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'mohen-nas-test-'))
 const project = `mohen-update-test-${Date.now()}`
 const file = path.join(temp, 'compose.yml')
 const passed = []
 function docker(args) {
-  return execFileSync('docker', args, { encoding: 'utf8', timeout: 120000, stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+  return execFileSync('docker', args, {
+    encoding: 'utf8',
+    timeout: 120000,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim()
 }
-function compose(...args) { return docker(['compose', '-p', project, '-f', file, ...args]) }
+function compose(...args) {
+  return docker(['compose', '-p', project, '-f', file, ...args])
+}
 
 async function main() {
   const config = YAML.parse(fs.readFileSync(path.join(release, 'docker-compose.yml'), 'utf8'))
+  assert.equal(config.services['university-homework'].image, 'university-homework:1.8.0')
+  assert.equal(config.services.nginx.image, 'nginx:mohen-1.8.0')
   for (const service of Object.values(config.services)) delete service.container_name
   const backend = config.services['university-homework']
   backend.environment.JWT_SECRET = crypto.randomBytes(48).toString('hex')
@@ -40,8 +48,8 @@ async function main() {
     let r = await fetch(`${origin}/api/health`)
     const health = await r.json()
     assert.equal(health.ok, true)
-    assert.equal(health.version, '1.7.2')
-    passed.push('backend_health_1.7.2')
+    assert.equal(health.version, '1.8.0')
+    passed.push('backend_health_1.8.0')
     r = await fetch(`${origin}/login`)
     assert.equal(r.status, 200)
     assert.ok(r.headers.get('content-security-policy'))
@@ -52,7 +60,7 @@ async function main() {
       assert.equal(r.status, 200)
       assert.equal(r.headers.get('cache-control'), 'no-store')
       const info = YAML.parse(await r.text())
-      assert.equal(info.version, '1.7.2')
+      assert.equal(info.version, '1.8.0')
       const artifact = info.files[0]
       const url = `${origin}/update/${role}/win-x64/${encodeURIComponent(artifact.url)}`
       r = await fetch(url, { headers: { Range: 'bytes=0-31' } })
@@ -68,26 +76,51 @@ async function main() {
     }
     r = await fetch(`${origin}/update/student/mac-arm64/latest.json`)
     const mac = await r.json()
-    assert.equal(mac.version, '1.7.2')
-    assert.ok(mac.file.endsWith('-1.7.2.dmg'))
-    r = await fetch(`${origin}/update/student/mac-arm64/${encodeURIComponent(mac.file)}`, { method: 'HEAD' })
+    assert.equal(mac.version, '1.8.0')
+    assert.ok(mac.file.endsWith('-1.8.0.dmg'))
+    r = await fetch(`${origin}/update/student/mac-arm64/${encodeURIComponent(mac.file)}`, {
+      method: 'HEAD',
+    })
     assert.equal(r.status, 200)
     passed.push('original_mac_dmg_available_without_false_version')
     assert.equal((await fetch(`${origin}/update/not-existing.yml`)).status, 404)
     assert.equal((await fetch(`${origin}/update/`)).status, 403)
-    assert.equal((await fetch(`${origin}/update/not-allowed.txt`, { method: 'PUT', body: 'test' })).status, 403)
+    assert.equal(
+      (await fetch(`${origin}/update/not-allowed.txt`, { method: 'PUT', body: 'test' })).status,
+      403,
+    )
     passed.push('missing_404_directory_listing_and_writes_denied')
-    fs.writeFileSync(path.join(release, 'DEPLOYMENT-VALIDATION.json'), JSON.stringify({
-      testedAt: new Date().toISOString(), environment: 'isolated local Docker linux/amd64',
-      nasModified: false, productionDataUsed: false, passed,
-      notTested: ['NAS live deployment', 'real PowerPoint clipboard on Windows', 'Windows installed A-to-B upgrade', 'Mac installed launch/update on hardware', '10GB concurrent upload'],
-    }, null, 2) + '\n')
+    fs.writeFileSync(
+      path.join(release, 'DEPLOYMENT-VALIDATION.json'),
+      JSON.stringify(
+        {
+          testedAt: new Date().toISOString(),
+          environment: 'isolated local Docker linux/amd64',
+          nasModified: false,
+          productionDataUsed: false,
+          passed,
+          notTested: [
+            'NAS live deployment',
+            'real PowerPoint clipboard on Windows',
+            'Windows installed A-to-B upgrade',
+            'Mac installed launch/update on hardware',
+            '10GB concurrent upload',
+          ],
+        },
+        null,
+        2,
+      ) + '\n',
+    )
     console.log(`Passed ${passed.length} deployment checks.`)
   } finally {
     compose('down')
     // Only the exact mkdtemp directory owned by this test is removed.
-    if (!temp.startsWith(path.join(os.tmpdir(), 'mohen-nas-test-'))) throw new Error('Unsafe cleanup path')
+    if (!temp.startsWith(path.join(os.tmpdir(), 'mohen-nas-test-')))
+      throw new Error('Unsafe cleanup path')
     fs.rmSync(temp, { recursive: true, force: true })
   }
 }
-main().catch((error) => { console.error(error.message); process.exitCode = 1 })
+main().catch((error) => {
+  console.error(error.message)
+  process.exitCode = 1
+})

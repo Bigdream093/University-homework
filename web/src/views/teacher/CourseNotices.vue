@@ -8,6 +8,7 @@ import RichTextEditor from '../../components/RichTextEditor.vue'
 import RichTextContent from '../../components/RichTextContent.vue'
 import { editableRichText } from '../../utils/richText.js'
 const imageBusy = ref(false)
+const saving = ref(false)
 const originalStatus = ref('draft'),
   historyDialog = ref(false),
   revisionDetail = ref(null)
@@ -67,9 +68,11 @@ function open(notice) {
   dialog.value = true
 }
 async function save() {
+  if (saving.value) return
   if (imageBusy.value) return ElMessage.warning('请先完成图片上传')
   form.value.content_format = 'html'
   if (!form.value.title.trim()) return ElMessage.warning('请填写通知标题')
+  saving.value = true
   try {
     if (editId.value) await api.put(`/notices/${editId.value}`, form.value)
     else await api.post(`/courses/${props.courseId}/notices`, form.value)
@@ -78,6 +81,8 @@ async function save() {
     load()
   } catch (error) {
     ElMessage.error(messageOf(error))
+  } finally {
+    saving.value = false
   }
 }
 async function withdraw(notice) {
@@ -142,7 +147,7 @@ useRefresh(load)
           }}</span
           ><span v-if="notice.pinned" class="badge" style="background: #e6a23c">置顶</span>
           <h3 class="card-title">{{ notice.title }}</h3>
-          <span class="hint">{{ brief(notice) }}</span
+          <span class="hint card-meta">{{ brief(notice) }}</span
           ><el-button-group @click.stop
             ><el-button
               size="small"
@@ -205,8 +210,8 @@ useRefresh(load)
       class="markdown-dialog"
       destroy-on-close
       :close-on-click-modal="false"
-      :close-on-press-escape="!imageBusy"
-      :show-close="!imageBusy"
+      :close-on-press-escape="!imageBusy && !saving"
+      :show-close="!imageBusy && !saving"
       ><el-form label-position="top"
         ><el-form-item label="标题"><el-input v-model="form.title" /></el-form-item
         ><el-form-item label="内容"
@@ -228,8 +233,13 @@ useRefresh(load)
             value-format="YYYY-MM-DD HH:mm:ss" /></el-form-item
         ><el-checkbox v-model="form.pinned">置顶显示</el-checkbox></el-form
       ><template #footer
-        ><el-button :disabled="imageBusy" @click="dialog = false">取消</el-button
-        ><el-button type="primary" color="#15554e" :disabled="imageBusy" @click="save"
+        ><el-button :disabled="imageBusy || saving" @click="dialog = false">取消</el-button
+        ><el-button
+          type="primary"
+          color="#15554e"
+          :disabled="imageBusy || saving"
+          :loading="saving"
+          @click="save"
           >保存</el-button
         ></template
       ></el-dialog

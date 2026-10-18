@@ -73,18 +73,23 @@ async function withdraw(extension) {
 useRefresh(load)
 </script>
 <template>
-  <section class="panel" style="margin-top: 20px">
-    <div class="toolbar">
+  <section class="panel extension-panel">
+    <div class="toolbar extension-toolbar">
       <h3>延期申请</h3>
-      <el-button @click="load">刷新</el-button
-      ><el-button
-        v-if="!teacher && canApply && !readonly"
-        :disabled="rows.some((extension) => extension.status === 'pending')"
-        @click="open()"
-        >申请延期</el-button
-      ><router-link :to="{ path: '/help', hash: teacher ? '#teacher-notice' : '#student-notice' }"
-        >延期规则</router-link
-      >
+      <div class="extension-actions">
+        <el-button @click="load">刷新</el-button>
+        <el-button
+          v-if="!teacher && canApply && !readonly"
+          :disabled="rows.some((extension) => extension.status === 'pending')"
+          @click="open()"
+          >申请延期</el-button
+        >
+        <router-link
+          class="el-button"
+          :to="{ path: '/help', hash: teacher ? '#teacher-extension' : '#student-extension' }"
+          ><span>延期规则</span></router-link
+        >
+      </div>
     </div>
     <p class="hint">
       申请不等于批准；不增加提交次数，不改变过去的迟交记录。小组理由仅申请人和教师可见。
@@ -143,3 +148,30 @@ useRefresh(load)
     >
   </section>
 </template>
+
+<style scoped>
+.extension-panel {
+  margin-top: 20px;
+}
+.extension-toolbar {
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.extension-toolbar h3 {
+  margin: 0;
+}
+.extension-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.extension-actions .el-button {
+  margin: 0;
+  text-decoration: none;
+}
+.extension-panel > .hint {
+  margin: 12px 0 0;
+  line-height: 1.7;
+}
+</style>

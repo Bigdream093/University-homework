@@ -9,6 +9,9 @@ const props = defineProps({
 })
 const root = ref(null)
 const html = computed(() => renderContent(props.content, props.format))
+const imagePreviewOpen = ref(false)
+const imagePreviewSrc = ref('')
+const imagePreviewAlt = ref('图片预览')
 let generation = 0
 let controller
 const urls = new Set()
@@ -16,6 +19,19 @@ function clear() {
   controller?.abort()
   for (const url of urls) URL.revokeObjectURL(url)
   urls.clear()
+  imagePreviewOpen.value = false
+  imagePreviewSrc.value = ''
+}
+function previewImage(event) {
+  if (event.type === 'keydown' && !['Enter', ' '].includes(event.key)) return
+  const image = event.target?.closest?.('img')
+  if (!image || !root.value?.contains(image)) return
+  event.preventDefault()
+  const src = image.currentSrc || image.getAttribute('src') || ''
+  if (!src) return
+  imagePreviewSrc.value = src
+  imagePreviewAlt.value = image.alt || '图片预览'
+  imagePreviewOpen.value = true
 }
 watch(
   html,
@@ -27,6 +43,11 @@ watch(
     await nextTick()
     if (current !== generation) return
     const images = [...(root.value?.querySelectorAll('img[data-editor-src]') || [])]
+    for (const image of root.value?.querySelectorAll('img') || []) {
+      image.tabIndex = 0
+      image.setAttribute('role', 'button')
+      image.setAttribute('aria-label', `${image.alt || '图片'}，按回车键放大查看`)
+    }
     const sources = [...new Set(images.map((image) => image.dataset.editorSrc))]
     let cursor = 0
     await Promise.all(
@@ -61,8 +82,13 @@ onBeforeUnmount(() => {
     ref="root"
     class="rich-text-content"
     :class="{ plain: format !== 'html' }"
+    @click="previewImage"
+    @keydown="previewImage"
     v-html="html"
   ></div>
+  <el-dialog v-model="imagePreviewOpen" title="图片预览" width="min(1100px, 94vw)" append-to-body>
+    <img class="rich-text-image-preview" :src="imagePreviewSrc" :alt="imagePreviewAlt" />
+  </el-dialog>
 </template>
 
 <style scoped>
@@ -80,6 +106,18 @@ onBeforeUnmount(() => {
   height: auto;
   margin: 12px 0;
   border-radius: 6px;
+  cursor: zoom-in;
+}
+.rich-text-content :deep(img:focus-visible) {
+  outline: 3px solid rgba(21, 85, 78, 0.55);
+  outline-offset: 3px;
+}
+.rich-text-image-preview {
+  display: block;
+  max-width: 100%;
+  max-height: 78vh;
+  margin: 0 auto;
+  object-fit: contain;
 }
 .rich-text-content :deep(pre) {
   padding: 14px;

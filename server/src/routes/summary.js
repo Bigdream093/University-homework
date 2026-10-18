@@ -21,7 +21,7 @@ router.put('/courses/:id/grade-config', auth, teacherOnly, (req, res) => {
 // 导出行序 = 学生名单原序（course_students.sort_order），与汇总页、学生名单页同一排序，不做任何重排。
 router.get('/courses/:id/summary/export', auth, teacherOnly, async (req, res) => {
   const course = courseAccess(req.params.id, req.user)
-  const { config, assignments, students } = courseSummary(course)
+  const { config, assignments, students } = courseSummary(course, { includePreviews: false })
   const workbook = new ExcelJS.Workbook()
 
   const sheet = workbook.addWorksheet('成绩汇总')
@@ -53,7 +53,10 @@ router.get('/courses/:id/summary/export', auth, teacherOnly, async (req, res) =>
   ]
   const rows = [
     ['导出时间', nowText()],
-    ['成绩口径', '平时/期末/总成绩均为百分制，保留 1 位小数；每次作业按 得分÷满分×100 折算后乘以其占总成绩的百分比计入'],
+    [
+      '成绩口径',
+      '平时/期末/总成绩均为百分制，保留 1 位小数；每次作业按 得分÷满分×100 折算后乘以其占总成绩的百分比计入',
+    ],
     ['平时占比', `${config.daily_ratio}%`],
     ['期末占比', `${config.final_ratio}%`],
     [

@@ -1,9 +1,45 @@
 import { db } from '../db.js'
+import { placeholders } from '../utils/sql.js'
 import { assignmentAccess, subjectFor, fail } from './access.js'
 import { resolveUploadPath } from '../utils/uploadPath.js'
+import { effectiveDeadline } from './extensions.js'
+import {
+  assignmentGroupMembers,
+  assignmentGroupMembersForGroups,
+} from './assignmentGroupMembers.js'
+
+export { assignmentGroupMembers }
+
+export function currentSubmission(assignment, subject, studentId) {
+  if (subject.not_assigned) return null
+  if (subject.group)
+    return db
+      .prepare('SELECT * FROM group_submissions WHERE assignment_group_id=?')
+      .get(subject.group.id)
+  return db
+    .prepare('SELECT * FROM submissions WHERE assignment_id=? AND student_id=?')
+    .get(assignment.id, studentId)
+}
+
+export function studentAssignmentContext(assignment, subject) {
+  return {
+    ...subject,
+    effective_deadline: subject.not_assigned
+      ? null
+      : effectiveDeadline(assignment, subject).deadline,
+    members: subject.group ? assignmentGroupMembers(subject.group.id) : [],
+  }
+}
+
 export function studentView(row) {
   if (!row) return null
-  const { score, comment, graded_at, file_url, ...safe } = row
+  const {
+    score: _score,
+    comment: _comment,
+    graded_at: _graded_at,
+    file_url: _file_url,
+    ...safe
+  } = row
   const actor = row.submitted_by
     ? db.prepare('SELECT name,username FROM users WHERE id=?').get(row.submitted_by)
     : null
@@ -43,7 +79,7 @@ export function submissionAccess(id, user, group = false, write = false) {
 export function historyRows(id, group = false) {
   return db
     .prepare(
-      `SELECT id,content,file_name,file_size,file_type,file_state,is_late,submitted_at${group ? ',submitted_by' : ''} FROM ${group ? 'group_submission_history' : 'submission_history'} WHERE ${group ? 'group_submission_id' : 'submission_id'}=? ORDER BY id DESC`,
+      `SELECT id,content,answer_question,file_name,file_size,file_type,file_state,is_late,submitted_at${group ? ',submitted_by' : ''} FROM ${group ? 'group_submission_history' : 'submission_history'} WHERE ${group ? 'group_submission_id' : 'submission_id'}=? ORDER BY id DESC`,
     )
     .all(id)
 }
@@ -67,20 +103,17 @@ export function receipts(id, group = false) {
           : receipt.file_state,
     }))
 }
-function placeholders(values) {
-  return values.map(() => '?').join(',')
-}
-function addTeacherDetails(rows, group = false) {
+function addTeacherDetails(rows, group = false, includeDetails = true) {
   const ids = rows.map((row) => row.id).filter(Boolean),
     filesById = new Map(),
     membersByGroup = new Map(),
     previewsById = new Map()
-  if (ids.length) {
+  if (includeDetails && ids.length) {
     const history = group ? 'group_submission_history' : 'submission_history',
       foreign = group ? 'group_submission_id' : 'submission_id'
     for (const file of db
       .prepare(
-        `SELECT ${foreign} owner_id,id history_id,file_name,file_size,file_type,content,submitted_at,is_late FROM ${history} WHERE ${foreign} IN (${placeholders(ids)}) AND file_state IN ('available','online') ORDER BY id`,
+        `SELECT ${foreign} owner_id,id history_id,file_name,file_size,file_type,content,answer_question,submitted_at,is_late FROM ${history} WHERE ${foreign} IN (${placeholders(ids)}) AND file_state IN ('available','online') ORDER BY id`,
       )
       .all(...ids)) {
       const { owner_id, ...view } = file,
@@ -89,13 +122,14 @@ function addTeacherDetails(rows, group = false) {
       filesById.set(owner_id, files)
     }
     // 预览图：每个提交只挂最近一次历史的图片组，一次批量查询避免列表页 N+1。
-    const latestByOwner = new Map()
-    for (const historyRow of db
-      .prepare(
-        `SELECT id,${foreign} owner_id FROM ${history} WHERE ${foreign} IN (${placeholders(ids)}) ORDER BY id`,
-      )
-      .all(...ids))
-      latestByOwner.set(historyRow.owner_id, historyRow.id)
+    const latestByOwner = new Map(
+      db
+        .prepare(
+          `SELECT ${foreign} owner_id,MAX(id) history_id FROM ${history} WHERE ${foreign} IN (${placeholders(ids)}) GROUP BY ${foreign}`,
+        )
+        .all(...ids)
+        .map((row) => [row.owner_id, row.history_id]),
+    )
     const prefix = group ? 'group-' : ''
     const column = group ? 'group_submission_history_id' : 'submission_history_id'
     const latestHistoryIds = [...latestByOwner.values()]
@@ -126,18 +160,14 @@ function addTeacherDetails(rows, group = false) {
   if (group) {
     const groupIds = rows.map((row) => row.assignment_group_id).filter(Boolean)
     if (groupIds.length)
-      for (const member of db
-        .prepare(
-          `SELECT assignment_group_id,student_id,username_snapshot username,name_snapshot name FROM assignment_group_members WHERE assignment_group_id IN (${placeholders(groupIds)}) ORDER BY student_id`,
-        )
-        .all(...groupIds)) {
+      for (const member of assignmentGroupMembersForGroups(groupIds)) {
         const members = membersByGroup.get(member.assignment_group_id) || []
         members.push(member)
         membersByGroup.set(member.assignment_group_id, members)
       }
   }
   return rows.map((row) => {
-    const { file_url, _assignment_id, ...safe } = row
+    const { file_url: _file_url, _assignment_id, ...safe } = row
     const previews = previewsById.get(row.id) || []
     return {
       ...safe,
@@ -151,38 +181,51 @@ function addTeacherDetails(rows, group = false) {
     }
   })
 }
-export function teacherRows(assignment) {
+export function teacherRows(assignment, { includeDetails = true } = {}) {
   const group = assignment.work_mode === 'group'
+  const submissionColumns = includeDetails
+    ? 's.*'
+    : 's.id,s.status,s.score,s.comment,s.returned_reason,s.is_late,s.submit_count,s.submitted_at'
   const rows = group
     ? db
         .prepare(
-          'SELECT s.*,g.assignment_id _assignment_id,g.id assignment_group_id,g.name name,g.name username,actor.name submitted_by_name,actor.username submitted_by_username FROM assignment_groups g LEFT JOIN group_submissions s ON s.assignment_group_id=g.id LEFT JOIN users actor ON actor.id=s.submitted_by WHERE g.assignment_id=? ORDER BY g.id',
+          `SELECT ${submissionColumns},g.assignment_id _assignment_id,g.id assignment_group_id,g.name name,g.name username,actor.name submitted_by_name,actor.username submitted_by_username,(EXISTS(SELECT 1 FROM assignment_group_members m WHERE m.assignment_group_id=g.id) AND NOT EXISTS(SELECT 1 FROM assignment_group_members m WHERE m.assignment_group_id=g.id AND instr(m.name_snapshot,'测试员')=0)) is_test_student FROM assignment_groups g LEFT JOIN group_submissions s ON s.assignment_group_id=g.id LEFT JOIN users actor ON actor.id=s.submitted_by WHERE g.assignment_id=? ORDER BY g.id`,
         )
         .all(assignment.id)
     : db
         .prepare(
-          'SELECT s.*,? _assignment_id,u.id student_id,u.username,u.name,u.status user_status FROM course_students cs JOIN users u ON u.id=cs.student_id LEFT JOIN submissions s ON s.student_id=u.id AND s.assignment_id=? WHERE cs.course_id=? ORDER BY COALESCE(cs.sort_order,cs.id),cs.id',
+          `SELECT ${submissionColumns},? _assignment_id,u.id student_id,u.username,u.name,u.status user_status,(instr(u.name,'测试员')>0) is_test_student FROM course_students cs JOIN users u ON u.id=cs.student_id LEFT JOIN submissions s ON s.student_id=u.id AND s.assignment_id=? WHERE cs.course_id=? ORDER BY COALESCE(cs.sort_order,cs.id),cs.id`,
         )
         .all(assignment.id, assignment.id, assignment.course_id)
-  return addTeacherDetails(rows, group)
+  return addTeacherDetails(rows, group, includeDetails)
 }
-export function teacherRowsForStudent(courseId, studentId) {
+// 某作业已生效的缺勤记0 分记录（个人与小组两种主体），供 mergeAbsenceMarks 合并进列表行。
+export function absenceMarks(assignmentId) {
+  return db
+    .prepare(
+      'SELECT student_id,assignment_group_id,graded_at FROM absence_grade_marks WHERE assignment_id=?',
+    )
+    .all(assignmentId)
+}
+export function teacherRowsForStudent(courseId, studentId, assignmentId = null) {
+  const assignmentFilter = assignmentId ? ' AND a.id=?' : ''
+  const params = [studentId, courseId, ...(assignmentId ? [assignmentId] : [])]
   const individual = db
     .prepare(
       `SELECT s.*,a.id _assignment_id,a.title,a.deadline,u.id student_id,u.username,u.name,u.status user_status
   FROM assignments a JOIN course_students cs ON cs.course_id=a.course_id AND cs.student_id=? JOIN users u ON u.id=cs.student_id
   LEFT JOIN submissions s ON s.assignment_id=a.id AND s.student_id=u.id
-  WHERE a.course_id=? AND a.work_mode<>'group' ORDER BY a.id DESC`,
+  WHERE a.course_id=? AND a.work_mode<>'group'${assignmentFilter} ORDER BY a.id DESC`,
     )
-    .all(studentId, courseId)
+    .all(...params)
   const groups = db
     .prepare(
       `SELECT s.*,a.id _assignment_id,a.title,a.deadline,g.id assignment_group_id,g.name name,g.name username,actor.name submitted_by_name,actor.username submitted_by_username
   FROM assignments a JOIN assignment_group_members member ON member.assignment_id=a.id AND member.student_id=?
   JOIN assignment_groups g ON g.id=member.assignment_group_id LEFT JOIN group_submissions s ON s.assignment_group_id=g.id
-  LEFT JOIN users actor ON actor.id=s.submitted_by WHERE a.course_id=? AND a.work_mode='group' ORDER BY a.id DESC`,
+  LEFT JOIN users actor ON actor.id=s.submitted_by WHERE a.course_id=? AND a.work_mode='group'${assignmentFilter} ORDER BY a.id DESC`,
     )
-    .all(studentId, courseId)
+    .all(...params)
   return [...addTeacherDetails(individual, false), ...addTeacherDetails(groups, true)].sort(
     (left, right) => right.assignment_id - left.assignment_id,
   )

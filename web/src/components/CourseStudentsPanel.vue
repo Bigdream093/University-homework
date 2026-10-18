@@ -9,13 +9,18 @@ const props = defineProps({
   students: { type: Array, required: true },
 })
 const emit = defineEmits(['changed'])
+const isDialogDismissal = (error) =>
+  ['cancel', 'close'].includes(error) || ['cancel', 'close'].includes(error?.message)
 const studentDialog = ref(false)
+const addingStudent = ref(false)
 const studentForm = reactive({ username: '', name: '' })
 function open() {
   studentDialog.value = true
 }
 defineExpose({ open })
 async function addStudent() {
+  if (addingStudent.value || props.course.status === 'archived') return
+  addingStudent.value = true
   try {
     await api.post(`/courses/${props.courseId}/students`, studentForm)
     studentDialog.value = false
@@ -24,6 +29,8 @@ async function addStudent() {
     emit('changed')
   } catch (error) {
     ElMessage.error(messageOf(error))
+  } finally {
+    addingStudent.value = false
   }
 }
 async function importFile(options) {
@@ -32,7 +39,7 @@ async function importFile(options) {
   try {
     const { data } = await api.post(`/courses/${props.courseId}/students/import`, formData)
     ElMessage.success(
-      `新增账号${data.created}人，加入课程${data.joined}人，重复${data.duplicated}人`,
+      `新增账号${data.created}人，加入课程${data.joined}人，重新启用并重置密码${data.reactivated || 0}人，重复${data.duplicated}人`,
     )
     options.onSuccess()
     emit('changed')
@@ -47,15 +54,20 @@ async function studentAction(student, action) {
       const { data } = await api.get(
         `/courses/${props.courseId}/students/${student.id}/removal-impact`,
       )
-      const summary = `将永久删除该生在本课程中的 ${data.submissions} 份提交、${data.history} 个历史版本、${data.previews} 张照片、${data.questions} 条提问及相关活动记录。共享小组作业会保留并移除其身份。请输入学号 ${student.username} 确认。`
+      const accountEffect = data.other_course_enrollments
+        ? `该账号还在其他 ${data.other_course_enrollments} 门课程中，账号和密码会保留。`
+        : '移除后账号会停用；以后重新添加时密码重置为123456，并要求首次登录修改。'
+      const summary = `将永久删除该生在本课程中的 ${data.submissions} 份提交、${data.history} 个历史版本、${data.previews} 张照片、${data.questions} 条提问及相关活动记录。共享小组作业会保留并移除其身份。${accountEffect}请输入学号 ${student.username} 确认。`
       await ElMessageBox.prompt(summary, '移除并清理资料', {
         type: 'warning',
         confirmButtonText: '永久删除',
         cancelButtonText: '取消',
         inputValidator: (value) => value === student.username || '输入的学号不正确',
       })
-      await api.delete(`/courses/${props.courseId}/students/${student.id}`)
-      ElMessage.success('学生及其课程资料已删除')
+      const { data: removalResult } = await api.delete(
+        `/courses/${props.courseId}/students/${student.id}`,
+      )
+      ElMessage.success(removalResult.message || '学生已移出课程')
     } else if (action === 'reset') {
       await api.post(`/students/${student.id}/reset-password`)
       ElMessage.success('密码已重置为123456')
@@ -65,7 +77,7 @@ async function studentAction(student, action) {
       })
     emit('changed')
   } catch (error) {
-    if (error !== 'cancel') ElMessage.error(messageOf(error))
+    if (!isDialogDismissal(error)) ElMessage.error(messageOf(error))
   }
 }
 </script>
@@ -120,8 +132,10 @@ async function studentAction(student, action) {
       ><el-form-item label="学号"><el-input v-model="studentForm.username" /></el-form-item
       ><el-form-item label="姓名"><el-input v-model="studentForm.name" /></el-form-item></el-form
     ><template #footer
-      ><el-button @click="studentDialog = false">取消</el-button
-      ><el-button type="primary" color="#15554e" @click="addStudent">添加</el-button></template
+      ><el-button :disabled="addingStudent" @click="studentDialog = false">取消</el-button
+      ><el-button type="primary" color="#15554e" :loading="addingStudent" @click="addStudent"
+        >添加</el-button
+      ></template
     ></el-dialog
   >
 </template>

@@ -18,8 +18,10 @@ export const contentSecurityPolicy = [
 ].join('; ')
 
 export function cspHeaders(mode = process.env.CSP_MODE || 'enforce') {
-  if (!['report-only', 'enforce'].includes(mode)) throw new Error('CSP_MODE must be report-only or enforce')
-  const header = mode === 'enforce' ? 'Content-Security-Policy' : 'Content-Security-Policy-Report-Only'
+  if (!['report-only', 'enforce'].includes(mode))
+    throw new Error('CSP_MODE must be report-only or enforce')
+  const header =
+    mode === 'enforce' ? 'Content-Security-Policy' : 'Content-Security-Policy-Report-Only'
   return (_req, res, next) => {
     res.setHeader(header, contentSecurityPolicy)
     next()
@@ -30,7 +32,10 @@ export function cspHeaders(mode = process.env.CSP_MODE || 'enforce') {
 let windowStart = 0
 let reports = 0
 export function reportCspViolation(req, res) {
-  if (Date.now() - windowStart > 60000) { windowStart = Date.now(); reports = 0 }
+  if (Date.now() - windowStart > 60000) {
+    windowStart = Date.now()
+    reports = 0
+  }
   const directive = req.body?.['csp-report']?.['effective-directive']
   if (reports++ < 20 && typeof directive === 'string' && /^[a-z-]{1,40}$/.test(directive))
     console.warn('CSP violation:', directive)

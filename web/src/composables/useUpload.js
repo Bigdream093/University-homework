@@ -25,6 +25,7 @@ export function isSubmissionConflict(error) {
 }
 export function useUpload() {
   const busy = ref(false),
+    phase = ref('idle'),
     percent = ref(0),
     state = ref(''),
     pending = ref(false),
@@ -38,6 +39,8 @@ export function useUpload() {
     fields = {},
     file = null,
     extraFiles = [],
+    clientReference,
+    onRequestId,
   }) {
     if (busy.value) throw new Error('当前上传尚未结束')
     const slot = 'upload:' + readUser()?.id + ':' + url,
@@ -57,12 +60,15 @@ export function useUpload() {
     const previous = saved?.signature === signature
     const intent = previous ? saved : { key: newRequestId(), signature }
     sessionStorage.setItem(slot, JSON.stringify(intent))
+    onRequestId?.(clientReference || intent.key)
     busy.value = true
+    phase.value = 'preparing'
     pending.value = true
     percent.value = 0
     loaded.value = 0
     total.value = null
     function succeed(result) {
+      phase.value = 'succeeded'
       state.value = '已保存'
       pending.value = false
       sessionStorage.removeItem(slot)
@@ -70,8 +76,11 @@ export function useUpload() {
     }
     try {
       if (previous) {
+        phase.value = 'uncertain'
         state.value = '正在查询上次结果'
-        const { data } = await api.get(statusUrl + intent.key)
+        const { data } = await api.get(statusUrl + intent.key, {
+          headers: { 'X-Client-Reference': clientReference || intent.key },
+        })
         if (data.state === 'succeeded') return succeed(data.result)
         if (data.state === 'processing') throw new Error('服务器仍在处理，请稍后查询/重试')
       }
@@ -80,6 +89,7 @@ export function useUpload() {
       if (file) body.append('file', file)
       for (const extra of extraFiles) body.append('previews', extra)
       controller = new AbortController()
+      phase.value = 'uploading'
       state.value = '正在上传'
       const { data } = await api.request({
         url,
@@ -87,30 +97,57 @@ export function useUpload() {
         data: body,
         timeout: 0,
         signal: controller.signal,
-        headers: { 'Idempotency-Key': intent.key },
+        headers: {
+          'Idempotency-Key': intent.key,
+          'X-Client-Reference': clientReference || intent.key,
+        },
         onUploadProgress: (event) => {
           loaded.value = event.loaded
           total.value = event.total || null
           percent.value = event.total
             ? Math.min(100, Math.round((event.loaded / event.total) * 100))
             : 0
-          state.value = percent.value >= 100 ? '正在保存，请勿重复提交' : '正在上传'
+          phase.value = percent.value >= 100 ? 'saving' : 'uploading'
+          state.value = phase.value === 'saving' ? '正在保存，请勿重复提交' : '正在上传'
         },
       })
       return succeed(data)
     } catch (error) {
       if (isSubmissionConflict(error)) {
+        phase.value = 'conflict'
         state.value = '提交冲突，请先刷新确认'
         pending.value = false
         sessionStorage.removeItem(slot)
         throw error
       }
-      state.value = '结果待确认，请查询/重试'
+      if (error.response?.status && error.response.status < 500) {
+        phase.value = 'failed'
+        pending.value = false
+        state.value = error.response.data?.message || '服务器拒绝了本次提交，请修改后重试'
+        throw error
+      }
+      phase.value = 'uncertain'
+      state.value = '正在确认服务器保存结果'
       try {
-        const { data } = await api.get(statusUrl + intent.key)
+        const { data } = await api.get(statusUrl + intent.key, {
+          headers: { 'X-Client-Reference': clientReference || intent.key },
+        })
         if (data.state === 'succeeded') return succeed(data.result)
-        if (data.state === 'failed') state.value = '保存失败，可以重试'
-      } catch {}
+        if (data.state === 'failed') {
+          phase.value = 'failed'
+          pending.value = false
+          state.value = data.error || '保存失败，可以重试'
+        } else if (data.state === 'processing') {
+          pending.value = true
+          state.value = '服务器仍在处理，结果待确认；请稍后查询/重试'
+        } else {
+          pending.value = true
+          state.value = '暂未查到服务器记录，结果待确认；请查询/重试同一内容'
+        }
+      } catch {
+        pending.value = true
+        state.value = '结果待确认，服务器状态暂时无法读取；请查询/重试'
+      }
       throw error
     } finally {
       busy.value = false
@@ -118,8 +155,10 @@ export function useUpload() {
     }
   }
   function cancel() {
+    if (!busy.value || !controller) return
     controller?.abort()
+    phase.value = 'uncertain'
     state.value = '已取消等待，正在确认服务器结果'
   }
-  return { busy, percent, state, pending, loaded, total, run, cancel }
+  return { busy, phase, percent, state, pending, loaded, total, run, cancel }
 }

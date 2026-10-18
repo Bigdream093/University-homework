@@ -3,6 +3,7 @@ import path from 'node:path'
 import express from 'express'
 import cors from 'cors'
 import { config } from './config.js'
+import { buildInfo } from './buildInfo.js'
 import './db.js'
 import authRoutes from './routes/auth.js'
 import courseRoutes from './routes/courses.js'
@@ -42,13 +43,24 @@ export const app = express()
 app.disable('x-powered-by')
 if (config.trustProxyHops > 0) app.set('trust proxy', config.trustProxyHops)
 app.use(cspHeaders())
-app.use(cors())
-app.post('/api/security/csp-report', express.json({ type: 'application/csp-report', limit: '8kb' }), reportCspViolation)
+// 白名单非空时按配置限制来源；未配置则保持原有宽松行为（同源部署无需任何跨域配置）。
+app.use(config.corsOrigins.length ? cors({ origin: config.corsOrigins }) : cors())
+app.post(
+  '/api/security/csp-report',
+  express.json({ type: 'application/csp-report', limit: '8kb' }),
+  reportCspViolation,
+)
 app.use(express.json({ limit: '2mb' }))
 const tzOk = process.env.TZ === 'Asia/Shanghai'
 if (!tzOk && process.env.NODE_ENV !== 'test') console.warn('建议设置 TZ=Asia/Shanghai')
 app.get('/api/health', (_req, res) =>
-  res.json({ ok: true, version: '1.7.2', timezone: 'Asia/Shanghai', tz_configured: tzOk }),
+  res.json({
+    ok: true,
+    version: buildInfo.version,
+    build: buildInfo,
+    timezone: 'Asia/Shanghai',
+    tz_configured: tzOk,
+  }),
 )
 app.use('/api/auth', authRoutes)
 app.use(

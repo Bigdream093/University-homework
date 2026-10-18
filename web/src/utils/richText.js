@@ -1,7 +1,9 @@
 import DOMPurify from 'dompurify'
 import linkify from './linkify.js'
+import { editorImagePattern } from '@university-homework/domain/editorImagePattern'
+import { summaryText } from '@university-homework/domain/summaryText'
 
-export const editorImagePattern = /^\/api\/editor-images\/([a-f0-9-]{36})$/
+export { editorImagePattern }
 
 // 非 html（plain 及遗留 markdown）按纯文本显示：转义 + 自动识别网址。
 export function renderContent(content, format) {
@@ -9,7 +11,7 @@ export function renderContent(content, format) {
 }
 
 // 旧纯文本进入富文本编辑器前，转义并按换行拆成段落。
-export function plainTextToHtml(text) {
+function plainTextToHtml(text) {
   return String(text ?? '')
     .split(/\r?\n/)
     .map(
@@ -24,18 +26,11 @@ export function editableRichText(content, format) {
 }
 
 export function contentSummary(content, format, limit = 160) {
-  if (format !== 'html')
-    return Array.from(
-      String(content || '')
-        .replace(/\s+/g, ' ')
-        .trim(),
-    )
-      .slice(0, limit)
-      .join('')
+  if (format !== 'html') return summaryText(content, limit)
   return richTextSummary(content, limit)
 }
 
-export function renderRichText(content) {
+function renderRichText(content) {
   const html = DOMPurify.sanitize(String(content || ''), {
     ADD_ATTR: ['colwidth', 'target'],
     FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form'],
@@ -59,10 +54,8 @@ export function renderRichText(content) {
   return root.innerHTML
 }
 
-export function richTextSummary(content, limit = 160) {
+function richTextSummary(content, limit = 160) {
   const root = document.createElement('div')
   root.innerHTML = renderRichText(content)
-  return Array.from((root.textContent || '').replace(/\s+/g, ' ').trim())
-    .slice(0, limit)
-    .join('')
+  return summaryText(root.textContent, limit)
 }

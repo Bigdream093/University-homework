@@ -44,8 +44,10 @@ async function login(username) {
 }
 
 async function makeCourse(token, name) {
-  const res = await requestAs(token, 'post', '/api/courses')
-    .send({ name: name || '内容测试', code: 'CNT' })
+  const res = await requestAs(token, 'post', '/api/courses').send({
+    name: name || '内容测试',
+    code: 'CNT',
+  })
   assert.equal(res.status, 201)
   return res.body.id
 }
@@ -62,21 +64,32 @@ function addTeacher(username) {
 test('notices: teacher creates, edits and withdraws; student visibility and ownership enforced', async () => {
   const teacherToken = await login('teacher')
   const courseId = await makeCourse(teacherToken)
-  await requestAs(teacherToken, 'post', `/api/courses/${courseId}/students`)
-    .send({ username: '20260001', name: '演示学生' })
+  await requestAs(teacherToken, 'post', `/api/courses/${courseId}/students`).send({
+    username: '20260001',
+    name: '演示学生',
+  })
   const studentToken = await login('20260001')
 
-  const noTitle = await requestAs(teacherToken, 'post', `/api/courses/${courseId}/notices`)
-    .send({ title: '', content: 'x' })
+  const noTitle = await requestAs(teacherToken, 'post', `/api/courses/${courseId}/notices`).send({
+    title: '',
+    content: 'x',
+  })
   assert.equal(noTitle.status, 400, '标题必填')
 
-  const draft = await requestAs(teacherToken, 'post', `/api/courses/${courseId}/notices`)
-    .send({ title: '草稿通知', content: '还没发布', status: 'draft' })
+  const draft = await requestAs(teacherToken, 'post', `/api/courses/${courseId}/notices`).send({
+    title: '草稿通知',
+    content: '还没发布',
+    status: 'draft',
+  })
   assert.equal(draft.status, 201)
   assert.equal(draft.body.status, 'draft')
 
-  const published = await requestAs(teacherToken, 'post', `/api/courses/${courseId}/notices`)
-    .send({ title: '重要通知', content: '请查收', status: 'published', pinned: true })
+  const published = await requestAs(teacherToken, 'post', `/api/courses/${courseId}/notices`).send({
+    title: '重要通知',
+    content: '请查收',
+    status: 'published',
+    pinned: true,
+  })
   assert.equal(published.status, 201)
 
   const teacherList = await requestAs(teacherToken, 'get', `/api/courses/${courseId}/notices`)
@@ -92,18 +105,27 @@ test('notices: teacher creates, edits and withdraws; student visibility and owne
   const outsiderList = await requestAs(studentToken, 'get', `/api/courses/${otherCourse}/notices`)
   assert.equal(outsiderList.status, 403, '未加入课程的学生不能查看')
 
-  const edit = await requestAs(teacherToken, 'put', `/api/notices/${draft.body.id}`)
-    .send({ title: '草稿通知-改', content: '已改', status: 'published' })
+  const edit = await requestAs(teacherToken, 'put', `/api/notices/${draft.body.id}`).send({
+    title: '草稿通知-改',
+    content: '已改',
+    status: 'published',
+  })
   assert.equal(edit.status, 200)
   assert.equal(edit.body.status, 'published')
 
-  const withdrawn = await requestAs(teacherToken, 'post', `/api/notices/${published.body.id}/withdraw`)
+  const withdrawn = await requestAs(
+    teacherToken,
+    'post',
+    `/api/notices/${published.body.id}/withdraw`,
+  )
   assert.equal(withdrawn.status, 200)
 
   addTeacher('otherteacher')
   const otherToken = await login('otherteacher')
-  const otherTeaches = await requestAs(otherToken, 'post', '/api/courses')
-    .send({ name: '别的老师课程', code: 'OTH' })
+  const otherTeaches = await requestAs(otherToken, 'post', '/api/courses').send({
+    name: '别的老师课程',
+    code: 'OTH',
+  })
   const otherCourseId = otherTeaches.body.id
   const notOwnerList = await requestAs(otherToken, 'get', `/api/courses/${courseId}/notices`)
   assert.equal(notOwnerList.status, 403, '非本课程教师不能查看')
@@ -115,8 +137,10 @@ test('notices: teacher creates, edits and withdraws; student visibility and owne
 test('materials: teacher uploads, student lists and downloads, delete removes file', async () => {
   const teacherToken = await login('teacher')
   const courseId = await makeCourse(teacherToken)
-  await requestAs(teacherToken, 'post', `/api/courses/${courseId}/students`)
-    .send({ username: '20260001', name: '演示学生' })
+  await requestAs(teacherToken, 'post', `/api/courses/${courseId}/students`).send({
+    username: '20260001',
+    name: '演示学生',
+  })
   const studentToken = await login('20260001')
 
   const noTitle = await requestAs(teacherToken, 'post', `/api/courses/${courseId}/materials`)
@@ -149,7 +173,10 @@ test('materials: teacher uploads, student lists and downloads, delete removes fi
   assert.equal(download.status, 200)
   assert.equal(download.body.toString(), '讲义内容')
 
-  const ticket = await requestAs(studentToken, 'post', `/api/materials/${materialId}/download-ticket`)
+  const ticket = await requestAs(studentToken, 'post', '/api/downloads/ticket').send({
+    kind: 'material',
+    id: materialId,
+  })
   assert.equal(ticket.status, 200)
   const resumedDownload = await request(app).get(ticket.body.url).set('Range', 'bytes=0-2')
   assert.equal(resumedDownload.status, 206)
@@ -165,13 +192,7 @@ test('materials: teacher uploads, student lists and downloads, delete removes fi
   assert.equal(browserDownload.status, 200)
   assert.equal(browserDownload.body.toString(), '讲义内容')
 
-  const commonTicket = await requestAs(studentToken, 'post', '/api/downloads/ticket')
-    .send({ kind: 'material', id: materialId })
-  assert.equal(commonTicket.status, 200)
-  const commonDownload = await request(app).get(commonTicket.body.url)
-  assert.equal(commonDownload.status, 200)
-
-  const invalidTicket = await request(app).get('/api/material-files/not-a-ticket')
+  const invalidTicket = await request(app).get('/api/download-files/not-a-ticket')
   assert.equal(invalidTicket.status, 401)
 
   const outsider = await requestAs(teacherToken, 'get', `/api/courses/${courseId}/materials`)
@@ -206,7 +227,7 @@ test('materials: non-enrolled student cannot list or download', async () => {
   const list = await requestAs(studentToken, 'get', `/api/courses/${courseId}/materials`)
   assert.equal(list.status, 403, '未加入课程的学生不能查看资料')
   await requestAs(studentToken, 'get', `/api/materials/${materialId}/file`).expect(403)
-  await requestAs(studentToken, 'post', `/api/materials/${materialId}/download-ticket`).expect(403)
   await requestAs(studentToken, 'post', '/api/downloads/ticket')
-    .send({ kind: 'material', id: materialId }).expect(403)
+    .send({ kind: 'material', id: materialId })
+    .expect(403)
 })

@@ -1,50 +1,74 @@
 import api from '../api/request.js'
+import { applyPreviewTicket } from '../utils/previewImages.js'
 
 export function useSummaryPreviews(students, assignments) {
   const ticketCache = new Map()
-  // <img> 不携带登录头：批量换取短期票据，单次上限 200 张，超量分批。
-  async function redeemTickets(ids) {
-    const need = [...new Set(ids)].filter((id) => !ticketCache.has(id))
-    for (let index = 0; index < need.length; index += 200) {
-      const { data } = await api.post('/previews/view-ticket', {
-        ids: need.slice(index, index + 200),
-      })
-      for (const [id, ticket] of Object.entries(data.tickets || {}))
-        ticketCache.set(Number(id), ticket || null)
-    }
-  }
-  async function redeemFirstPreviews() {
-    const ids = []
+  const ticketExpiries = new Map()
+  let generation = 0
+  function applyTickets(ids = null) {
+    const included = ids ? new Set(ids.map(Number)) : null
     for (const student of students.value)
       for (const assignment of assignments.value) {
         const cell = student.cells?.[assignment.id]
-        if (cell?.previews?.length) ids.push(cell.previews[0].id)
-      }
-    if (!ids.length) return
-    try {
-      await redeemTickets(ids)
-      applyTickets()
-    } catch {
-      /* 票据失败时缩略图不可见，分数与文件链接不受影响 */
-    }
-  }
-  function applyTickets() {
-    for (const student of students.value)
-      for (const assignment of assignments.value) {
-        for (const preview of student.cells?.[assignment.id]?.previews || []) {
-          const ticket = ticketCache.get(preview.id)
-          if (ticket) {
-            preview.thumbnail = ticket.thumbnail
-            preview.preview = ticket.file
-          }
+        for (const preview of cell?.previews || []) {
+          if (included ? !included.has(Number(preview.id)) : preview.ticketPending) continue
+          preview.group = cell.kind === 'group'
+          const ticket = ticketCache.get(Number(preview.id))
+          applyPreviewTicket(preview, ticket)
+          preview.ticketUnavailable = !ticket
+          preview.ticketPending = false
         }
       }
   }
-
+  async function redeemTickets(ids, refresh = false) {
+    const current = generation
+    const unique = [...new Set(ids.map(Number).filter(Boolean))]
+    const included = new Set(unique)
+    for (const student of students.value)
+      for (const assignment of assignments.value)
+        for (const preview of student.cells?.[assignment.id]?.previews || [])
+          if (included.has(Number(preview.id))) preview.ticketPending = true
+    const need = unique.filter(
+      (id) => refresh || !ticketCache.has(id) || ticketExpiries.get(id) <= Date.now(),
+    )
+    applyTickets(unique.filter((id) => !need.includes(id)))
+    const batches = Array.from({ length: Math.ceil(need.length / 200) }, (_, index) =>
+      need.slice(index * 200, (index + 1) * 200),
+    )
+    await Promise.all(
+      batches.map(async (batch) => {
+        try {
+          const { data } = await api.post('/previews/view-ticket', { ids: batch })
+          if (current !== generation) return
+          for (const id of batch) {
+            const ticket = data.tickets?.[id]
+            if (ticket) {
+              ticketCache.set(id, ticket)
+              ticketExpiries.set(id, Date.now() + 9 * 60 * 1000)
+            } else {
+              ticketCache.delete(id)
+              ticketExpiries.delete(id)
+            }
+          }
+          applyTickets(batch)
+        } catch {
+          if (current !== generation) return
+          for (const id of batch) {
+            ticketCache.delete(id)
+            ticketExpiries.delete(id)
+          }
+          applyTickets(batch)
+        }
+      }),
+    )
+  }
   return {
     redeemTickets,
-    redeemFirstPreviews,
     applyTickets,
-    clearTickets: () => ticketCache.clear(),
+    clearTickets: () => {
+      generation += 1
+      ticketCache.clear()
+      ticketExpiries.clear()
+    },
   }
 }

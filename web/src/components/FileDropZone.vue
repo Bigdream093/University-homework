@@ -44,6 +44,17 @@ function onDrop(event) {
   emitFile(event.dataTransfer?.files)
 }
 
+function activateWithKeyboard(event) {
+  if (props.disabled || !['Enter', ' '].includes(event.key)) return
+  event.preventDefault()
+  input.value?.click()
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024 ** 2) return `${Math.max(1, Math.round(bytes / 1024))} KB`
+  return `${(bytes / 1024 ** 2).toFixed(1)} MB`
+}
+
 // 拖到上传框以外的区域时阻止浏览器默认打开文件。
 function preventWindowDrop(event) {
   event.preventDefault()
@@ -76,45 +87,30 @@ watch(
   />
   <label
     :for="id"
-    class="file-dropzone"
+    class="upload-dropzone file-dropzone"
     :class="{ dragging, disabled }"
+    role="button"
+    tabindex="0"
+    :aria-disabled="disabled"
     @dragenter.prevent="onDragEnter"
     @dragover.prevent
     @dragleave.prevent="onDragLeave"
     @drop.prevent="onDrop"
+    @keydown="activateWithKeyboard"
   >
-    <b>{{ modelValue ? modelValue.name : dragging ? '松开即可选用该文件' : placeholder }}</b>
-    <slot />
+    <span class="upload-dropzone__icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none">
+        <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v5h14v-5" />
+      </svg>
+    </span>
+    <span class="upload-dropzone__main">
+      <strong class="upload-dropzone__title">{{
+        modelValue ? modelValue.name : dragging ? '松开即可选用该文件' : placeholder
+      }}</strong>
+      <span v-if="modelValue" class="upload-dropzone__selected">
+        已选择 · {{ formatSize(modelValue.size) }} · 点击此处可更换
+      </span>
+    </span>
+    <span v-if="$slots.default" class="upload-dropzone__details"><slot /></span>
   </label>
 </template>
-
-<style scoped>
-.file-dropzone {
-  display: block;
-  border: 1px dashed #9bb8b2;
-  border-radius: 12px;
-  padding: 18px;
-  text-align: center;
-  cursor: pointer;
-  background: #f7fbf9;
-  transition:
-    border-color 0.15s,
-    background 0.15s,
-    box-shadow 0.15s;
-}
-.file-dropzone:hover {
-  border-color: #15554e;
-}
-.file-dropzone.dragging {
-  border: 2px solid #15554e;
-  background: #e8f3ef;
-  box-shadow: 0 0 0 4px rgba(21, 85, 78, 0.08);
-}
-.file-dropzone.disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-.file-dropzone.disabled:hover {
-  border-color: #9bb8b2;
-}
-</style>

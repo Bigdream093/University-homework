@@ -6,9 +6,13 @@ const { normalizeUpdateBase, updateDirectory } = require('../src/update-policy.c
 function makeBuildConfig(role, baseUrl) {
   if (!['teacher', 'student'].includes(role)) throw new Error('Invalid client role')
   const base = normalizeUpdateBase(baseUrl)
-  const config = YAML.parse(fs.readFileSync(path.join(__dirname, `../electron-builder.${role}.yml`), 'utf8'))
+  const config = YAML.parse(
+    fs.readFileSync(path.join(__dirname, `../electron-builder.${role}.yml`), 'utf8'),
+  )
   config.extraMetadata = { ...config.extraMetadata, updateBaseUrl: base }
-  config.win.publish = base ? { provider: 'generic', url: updateDirectory(base, role, 'win32', 'x64') } : null
+  config.win.publish = base
+    ? { provider: 'generic', url: updateDirectory(base, role, 'win32', 'x64') }
+    : null
   if (config.mac) config.mac.publish = null
   return config
 }

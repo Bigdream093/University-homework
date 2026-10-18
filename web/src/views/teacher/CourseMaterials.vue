@@ -14,13 +14,26 @@ const props = defineProps({
   readonly: Boolean,
 })
 const materials = ref([])
+const moving = ref(false)
+async function moveMaterial(material, direction) {
+  if (moving.value || props.readonly) return
+  moving.value = true
+  try {
+    await api.post(`/materials/${material.id}/move`, { direction })
+    await load()
+  } catch (error) {
+    ElMessage.error(messageOf(error))
+  } finally {
+    moving.value = false
+  }
+}
 const dialog = ref(false)
 const editId = ref(null)
 const form = ref({ title: '', description: '', file: null })
 const MATERIAL_MAX_BYTES = 10 * 1024 ** 3
 const uploading = ref(false)
 const upload = useChunkedUpload(),
-  { percent, state, busy, loaded, total } = upload
+  { percent, state, busy, loaded, total, canPause, canCancel } = upload
 const readers = ref([]),
   readersDialog = ref(false)
 const downloadTask = useDownload()
@@ -66,10 +79,6 @@ async function save() {
   }
   uploading.value = true
   try {
-    const fd = new FormData()
-    fd.append('title', form.value.title)
-    fd.append('description', form.value.description)
-    if (form.value.file) fd.append('file', form.value.file)
     const metadata = { title: form.value.title, description: form.value.description }
     await upload.run({
       kind: 'material',
@@ -78,7 +87,7 @@ async function save() {
         : { mode: 'create', course_id: Number(props.courseId) },
       metadata,
       files: [{ role: 'file', file: form.value.file, order: 0 }],
-      legacy: {
+      fallback: {
         url: editId.value ? `/materials/${editId.value}` : `/courses/${props.courseId}/materials`,
         method: editId.value ? 'put' : 'post',
         statusUrl: editId.value
@@ -144,7 +153,22 @@ useRefresh(load)
       </el-table-column>
       <el-table-column prop="download_count" label="学生下载次数" width="130" />
       <el-table-column prop="created_at" label="上传时间" width="180" />
-      <el-table-column label="操作" width="250">
+      <el-table-column label="排序" width="130">
+        <template #default="{ row, $index }">
+          <el-button
+            link
+            :disabled="readonly || moving || $index === 0"
+            @click="moveMaterial(row, 'up')"
+            >上移</el-button
+          ><el-button
+            link
+            :disabled="readonly || moving || $index === materials.length - 1"
+            @click="moveMaterial(row, 'down')"
+            >下移</el-button
+          >
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="260">
         <template #default="{ row }">
           <el-button link @click="showReaders(row)">查看下载记录</el-button
           ><el-button link type="primary" @click="downloadMaterial(row)">下载</el-button>
@@ -157,7 +181,7 @@ useRefresh(load)
     </el-table>
     <div v-else class="empty">还没有上传学习资料。</div>
 
-    <el-dialog v-model="dialog" :title="editId ? '编辑资料' : '上传资料'" width="min(520px, 92vw)">
+    <el-dialog v-model="dialog" :title="editId ? '编辑资料' : '上传资料'" width="min(700px, 94vw)">
       <el-form label-position="top" :disabled="busy">
         <el-form-item label="标题">
           <el-input v-model="form.title" />
@@ -172,7 +196,10 @@ useRefresh(load)
             :placeholder="
               editId ? '不更换文件（如需要请拖拽或重新选择）' : '点击选择或拖拽文件到这里'
             "
-          />
+          >
+            <span class="upload-dropzone__tag">文档、图片、视频、设计源文件和压缩包</span>
+            <span class="upload-dropzone__tag">单文件不超过 10 GB</span>
+          </FileDropZone>
         </el-form-item>
       </el-form>
       <el-progress v-if="state" :percentage="percent" :indeterminate="!total && busy" />
@@ -183,14 +210,8 @@ useRefresh(load)
       <p role="status">{{ state }}</p>
       <template #footer>
         <el-button :disabled="busy" @click="dialog = false">关闭</el-button
-        ><el-button v-if="busy" @click="upload.pause">暂停</el-button
-        ><el-button
-          v-if="state && !state.includes('已保存')"
-          type="danger"
-          plain
-          @click="upload.cancel"
-          >取消上传</el-button
-        >
+        ><el-button v-if="canPause" @click="upload.pause">暂停</el-button
+        ><el-button v-if="canCancel" type="danger" plain @click="upload.cancel">取消上传</el-button>
         <el-button type="primary" color="#15554e" :loading="uploading" @click="save"
           >保存</el-button
         >

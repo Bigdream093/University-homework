@@ -90,7 +90,7 @@ export function useDownload() {
       if (result.state === 'completed') ElMessage.success('下载完成')
     } catch (error) {
       remove(id)
-      ElMessage.error(error?.message || messageOf(error))
+      ElMessage.error(messageOf(error))
     }
   }
 
@@ -98,7 +98,7 @@ export function useDownload() {
     try {
       await window.mohenDesktop.pauseDownload(id)
     } catch (error) {
-      ElMessage.error(error?.message || messageOf(error))
+      ElMessage.error(messageOf(error))
     }
   }
 
@@ -108,7 +108,7 @@ export function useDownload() {
       upsert({ requestId: id, ...result })
       if (result.state === 'completed') ElMessage.success('下载完成')
     } catch (error) {
-      const message = error?.message || messageOf(error)
+      const message = messageOf(error)
       upsert({ requestId: id, state: 'failed', message })
       ElMessage.error(message)
     }
@@ -120,7 +120,7 @@ export function useDownload() {
       upsert({ requestId: id, ...result })
       ElMessage.info('下载已取消，临时文件已清理')
     } catch (error) {
-      ElMessage.error(error?.message || messageOf(error))
+      ElMessage.error(messageOf(error))
     }
   }
 
@@ -128,7 +128,7 @@ export function useDownload() {
     try {
       await window.mohenDesktop.openDownloadFolder(id)
     } catch (error) {
-      ElMessage.error(error?.message || messageOf(error))
+      ElMessage.error(messageOf(error))
     }
   }
 
@@ -141,7 +141,7 @@ export function useDownload() {
     try {
       await window.mohenDesktop.dismissDownload(id)
     } catch (error) {
-      ElMessage.error(error?.message || messageOf(error))
+      ElMessage.error(messageOf(error))
     }
     remove(id)
   }

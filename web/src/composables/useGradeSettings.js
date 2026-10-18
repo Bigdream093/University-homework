@@ -1,4 +1,6 @@
 import { computed, reactive, ref, watch } from 'vue'
+import { round1 } from '@university-homework/domain/numbers'
+import { dailyWeightSum } from '@university-homework/domain/gradeScores'
 
 export function useGradeSettings(assignments) {
   const savedConfig = ref({
@@ -36,7 +38,7 @@ export function useGradeSettings(assignments) {
   watch(
     () => draft.daily_ratio,
     (value) => {
-      draft.final_ratio = Math.round((100 - Number(value || 0)) * 10) / 10
+      draft.final_ratio = round1(100 - Number(value || 0))
     },
   )
 
@@ -58,17 +60,10 @@ export function useGradeSettings(assignments) {
     assignments.value.filter((assignment) => assignment.id !== Number(draft.final_assignment_id)),
   )
   // 平时各项占总成绩百分比之和（草稿与期末作业不参与）；服务端要求它必须等于平时占比才能保存。
-  const weightSum = computed(() => {
-    let sum = 0
-    for (const assignment of assignments.value) {
-      if (assignment.id === Number(draft.final_assignment_id) || assignment.status === 'draft')
-        continue
-      const weight = Number(draft.weights?.[assignment.id] ?? 0)
-      if (Number.isFinite(weight) && weight > 0) sum += weight
-    }
-    return Math.round(sum * 10) / 10
-  })
-  const dailyTarget = computed(() => Math.round(Number(draft.daily_ratio || 0) * 10) / 10)
+  const weightSum = computed(() =>
+    dailyWeightSum(assignments.value, draft.final_assignment_id, draft.weights),
+  )
+  const dailyTarget = computed(() => round1(Number(draft.daily_ratio || 0)))
   const weightsMatch = computed(() => weightSum.value === dailyTarget.value)
   const finalAssignment = computed(
     () =>
@@ -76,22 +71,20 @@ export function useGradeSettings(assignments) {
       null,
   )
 
-  // 平均分配：把平时占比均分到各已发布平时作业（误差落在最后一项），草稿作业清 0。
+  // 平均分配：按0.1个百分点分配余数，保证合计精确；草稿作业清 0。
   function distributeEvenly() {
     const rows = weightRows.value.filter((assignment) => assignment.status !== 'draft')
-    const each = rows.length ? Math.round((dailyTarget.value / rows.length) * 10) / 10 : 0
-    let assigned = 0
+    const targetTenths = Math.round(dailyTarget.value * 10)
+    const baseTenths = rows.length ? Math.floor(targetTenths / rows.length) : 0
+    let remainder = rows.length ? targetTenths % rows.length : 0
     for (const assignment of weightRows.value) {
       if (assignment.status === 'draft') {
         draft.weights[assignment.id] = 0
         continue
       }
-      const isLast = assignment.id === rows[rows.length - 1].id
-      const value = isLast
-        ? Math.max(0, Math.round((dailyTarget.value - assigned) * 10) / 10)
-        : each
-      draft.weights[assignment.id] = value
-      assigned = Math.round((assigned + value) * 10) / 10
+      const valueTenths = baseTenths + (remainder > 0 ? 1 : 0)
+      if (remainder > 0) remainder -= 1
+      draft.weights[assignment.id] = valueTenths / 10
     }
   }
 

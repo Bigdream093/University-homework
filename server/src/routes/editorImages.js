@@ -6,15 +6,16 @@ import multer from 'multer'
 import sharp from 'sharp'
 import { db } from '../db.js'
 import { config } from '../config.js'
+import { EDITOR_IMAGE_MAX_BYTES, EDITOR_IMAGE_MAX_PIXELS } from '@university-homework/domain/limits'
 import { auth } from '../middleware/auth.js'
-import { courseAccess, fail } from '../services/access.js'
+import { courseAccess, fail, idValue } from '../services/access.js'
 import { canReadEditorImage } from '../services/editorImageAccess.js'
 import { resolveUploadPath } from '../utils/uploadPath.js'
 
 const router = Router()
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 0 },
+  limits: { fileSize: EDITOR_IMAGE_MAX_BYTES, files: 1, fields: 0 },
 })
 
 router.post(
@@ -29,7 +30,7 @@ router.post(
     if (!req.file) fail(400, '请选择图片')
     let buffer
     try {
-      const source = sharp(req.file.buffer, { limitInputPixels: 40_000_000 })
+      const source = sharp(req.file.buffer, { limitInputPixels: EDITOR_IMAGE_MAX_PIXELS })
       const metadata = await source.metadata()
       if (!['jpeg', 'png', 'webp'].includes(metadata.format))
         fail(400, '仅支持 JPG、PNG、WebP 图片')
@@ -46,7 +47,7 @@ router.post(
     try {
       db.prepare(
         'INSERT INTO editor_images(id,course_id,uploader_id,file_url) VALUES(?,?,?,?)',
-      ).run(id, Number(req.params.id), req.user.id, key)
+      ).run(id, idValue(req.params.id), req.user.id, key)
     } catch (error) {
       await fs.unlink(file).catch(() => {})
       throw error

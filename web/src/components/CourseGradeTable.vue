@@ -1,54 +1,25 @@
 <script setup>
-import { ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import api, { messageOf } from '../api/request.js'
-const props = defineProps({
+import SubmissionPreview from './SubmissionPreview.vue'
+import { round1 } from '@university-homework/domain/numbers'
+defineProps({
   tableRows: { type: Array, required: true },
   visibleAssignments: { type: Array, required: true },
   draft: { type: Object, required: true },
   readonly: Boolean,
 })
-const emit = defineEmits(['workspace', 'graded'])
-const editingKey = ref(''),
-  editValue = ref(null)
+const emit = defineEmits(['workspace'])
 const formatScore = (value) =>
   value === null || value === undefined || !Number.isFinite(Number(value))
     ? '—'
-    : (Math.round(Number(value) * 10) / 10).toFixed(1)
+    : round1(Number(value)).toFixed(1)
 
-function startEdit(student, assignment) {
-  const cell = student.cells?.[assignment.id]
-  if (!cell || cell.not_assigned || !cell.id || props.readonly) return
-  editingKey.value = `${student.id}:${assignment.id}`
-  editValue.value = cell.status === 'graded' ? cell.score : null
-}
-async function confirmEdit(student, assignment) {
-  const key = `${student.id}:${assignment.id}`
-  if (editingKey.value !== key) return
-  editingKey.value = ''
-  const cell = student.cells?.[assignment.id]
-  if (!cell || !cell.id) return
-  const score = Number(editValue.value)
-  if (
-    editValue.value === null ||
-    editValue.value === '' ||
-    !Number.isFinite(score) ||
-    score < 0 ||
-    score > Number(assignment.total_score)
-  ) {
-    ElMessage.warning(`成绩必须在 0 到 ${assignment.total_score} 之间`)
-    return
-  }
-  try {
-    await api.post(cell.api_base + '/grade', { score, comment: cell.comment || '' })
-    emit('graded', { studentId: student.id, assignmentId: assignment.id, score })
-    ElMessage.success('成绩已保存')
-  } catch (error) {
-    ElMessage.error(messageOf(error))
-  }
-}
+const workspaceLabel = (cell) =>
+  ({ submitted: '评分', returned: '查看退回作业', graded: '查看评分' })[cell.status] || '查看作业'
 
-const statusLabel = (cell) => ({ submitted: '待批改', returned: '已退回' })[cell.status] || '未评分'
+function openWorkspace(row, assignment) {
+  const cell = row.cells[assignment.id]
+  emit('workspace', row, assignment, cell.status === 'submitted' ? 'grade' : 'view')
+}
 </script>
 <template>
   <el-table :data="tableRows" stripe border size="default" class="summary-table">
@@ -88,57 +59,20 @@ const statusLabel = (cell) => ({ submitted: '待批改', returned: '已退回' }
       <template #default="{ row }">
         <template v-if="row.cells[assignment.id] && row.cells[assignment.id].id">
           <div class="cell-box">
-            <div
-              v-if="row.cells[assignment.id].previews?.length"
-              class="thumb-wrap"
-              title="点击打开看图评分"
-              @click="emit('workspace', row, assignment)"
-            >
-              <img
-                :src="
-                  row.cells[assignment.id].previews[0].thumbnail ||
-                  row.cells[assignment.id].previews[0].preview
-                "
-                class="cell-thumb"
-                alt=""
-                loading="lazy"
-              />
-              <span v-if="row.cells[assignment.id].preview_count > 1" class="thumb-badge"
-                >{{ row.cells[assignment.id].preview_count }}张</span
-              >
-            </div>
-            <el-button v-else link type="primary" @click="emit('workspace', row, assignment)">{{
-              row.cells[assignment.id].file_name || '在线作答'
+            <el-button link type="primary" @click="openWorkspace(row, assignment)">{{
+              workspaceLabel(row.cells[assignment.id])
             }}</el-button>
-            <div class="score-line">
-              <template v-if="editingKey === `${row.id}:${assignment.id}`">
-                <el-input-number
-                  v-model="editValue"
-                  :min="0"
-                  :max="assignment.total_score"
-                  size="small"
-                  style="width: 110px"
-                  @keyup.enter="confirmEdit(row, assignment)"
-                  @blur="confirmEdit(row, assignment)"
-                />
-              </template>
-              <template v-else>
-                <span
-                  v-if="row.cells[assignment.id].status === 'graded'"
-                  class="score"
-                  :title="readonly ? '' : '点击修改成绩'"
-                  @click="startEdit(row, assignment)"
-                  >{{ row.cells[assignment.id].score
-                  }}<span v-if="row.cells[assignment.id].is_late" class="late-mark">迟</span></span
-                >
-                <span
-                  v-else
-                  class="score pending"
-                  :title="readonly ? '' : '点击直接评分'"
-                  @click="startEdit(row, assignment)"
-                  >{{ statusLabel(row.cells[assignment.id]) }}</span
-                >
-              </template>
+            <SubmissionPreview
+              v-if="row.cells[assignment.id].previews?.length"
+              :previews="row.cells[assignment.id].previews"
+              :title="`${row.name} · ${assignment.title}`"
+            />
+            <div v-if="row.cells[assignment.id].status === 'graded'" class="score">
+              {{ formatScore(row.cells[assignment.id].score) }} 分
+              <span v-if="row.cells[assignment.id].is_late" class="late-mark">迟</span>
+            </div>
+            <div v-else class="cell-sub hint">
+              {{ row.cells[assignment.id].status === 'returned' ? '等待学生修改' : '待批改' }}
             </div>
             <div
               v-if="row.cells[assignment.id].group_name"
@@ -171,7 +105,14 @@ const statusLabel = (cell) => ({ submitted: '待批改', returned: '已退回' }
         ><b>{{ formatScore(row.live.final) }}</b></template
       >
     </el-table-column>
-    <el-table-column label="总成绩" width="100" fixed="right" align="center">
+    <el-table-column
+      label="总成绩"
+      width="100"
+      fixed="right"
+      align="center"
+      class-name="total-score-cell"
+      label-class-name="total-score-header"
+    >
       <template #default="{ row }"
         ><b class="total">{{ formatScore(row.live.total) }}</b></template
       >
@@ -184,6 +125,25 @@ const statusLabel = (cell) => ({ submitted: '待批改', returned: '已退回' }
 <style scoped>
 .summary-table {
   width: 100%;
+}
+.summary-table :deep(.el-table__header-wrapper th.el-table__cell) {
+  background: #f3f8f5;
+  color: #47645d;
+  font-weight: 600;
+}
+.summary-table :deep(.el-table__body td.el-table__cell) {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.summary-table :deep(.el-table__body tr:hover > td.el-table__cell) {
+  background: #f5faf7;
+}
+.summary-table :deep(.el-table__body td.total-score-cell) {
+  background: #f5faf8;
+}
+.summary-table :deep(.el-table__header th.total-score-header) {
+  background: #eaf3ef;
+  color: #15554e;
 }
 .col-head {
   display: flex;
@@ -204,47 +164,13 @@ const statusLabel = (cell) => ({ submitted: '待批改', returned: '已退回' }
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 6px 0;
-}
-.thumb-wrap {
-  position: relative;
-  cursor: zoom-in;
-  line-height: 0;
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid var(--line);
-}
-.cell-thumb {
-  width: 88px;
-  height: 64px;
-  object-fit: cover;
-  display: block;
-}
-.thumb-badge {
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
-  background: rgba(21, 85, 78, 0.85);
-  color: #fff;
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 8px;
-  line-height: 1.5;
+  gap: 4px;
+  padding: 4px 0;
 }
 .score {
-  cursor: pointer;
   color: #15554e;
   font-weight: 600;
-  border-bottom: 1px dashed #9ab8b2;
-}
-.score:hover {
-  color: #0d3b36;
-}
-.score.pending {
-  color: #b58a2a;
-  font-weight: 400;
-  border-bottom: none;
+  font-variant-numeric: tabular-nums;
 }
 .late-mark {
   margin-left: 4px;
@@ -257,7 +183,8 @@ const statusLabel = (cell) => ({ submitted: '待批改', returned: '已退回' }
 }
 .cell-empty {
   display: inline-block;
-  padding: 24px 0;
+  padding: 14px 0;
+  color: #84958f;
 }
 .cell-sub {
   max-width: 150px;
@@ -267,5 +194,7 @@ const statusLabel = (cell) => ({ submitted: '待批改', returned: '已退回' }
 }
 .total {
   color: #15554e;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
 }
 </style>

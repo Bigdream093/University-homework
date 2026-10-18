@@ -5,6 +5,7 @@ import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { db } from '../db.js'
 import { config } from '../config.js'
+import { DEFAULT_ASSIGNMENT_FILE_MAX_MB, LIMITS, CHUNK_BYTES } from '@university-homework/domain/limits'
 import { assignmentAccess, courseAccess, fail, idValue, subjectFor, textValue } from './access.js'
 import {
   allowedUploadName,
@@ -14,14 +15,15 @@ import {
   safeName,
 } from '../utils/fileFilter.js'
 import { nowText } from '../utils/time.js'
+import { httpError } from '../utils/httpError.js'
 import { promoteUpload, queueCleanup } from './storage.js'
 import { normalizeStorageKey, resolveUploadPath, toStorageKey } from '../utils/uploadPath.js'
 import { preparePreview } from './previewService.js'
 import { saveSubmission } from './submissionLogic.js'
 import { studentView } from './submissionQueries.js'
 import { saveMaterialSession } from './materialService.js'
+import { requiredAnswerError } from '@university-homework/domain/requiredAnswers'
 
-const CHUNK_BYTES = 8 * 1024 * 1024
 const DISK_RESERVE_BYTES = 256 * 1024 * 1024
 const activeFiles = new Set()
 const future = () => db.prepare("SELECT datetime('now','+08:00','+24 hours') value").get().value
@@ -31,10 +33,9 @@ function ensureDiskSpace(directory, needed) {
   const stat = fs.statfsSync(directory, { bigint: true }),
     available = stat.bavail * stat.bsize
   if (available < BigInt(needed) + BigInt(DISK_RESERVE_BYTES))
-    throw Object.assign(
-      new Error('服务器存储空间不足，上传进度已保留，请联系管理员清理空间后继续'),
-      { status: 507, expose: true },
-    )
+    throw httpError(507, '服务器存储空间不足，上传进度已保留，请联系管理员清理空间后继续', {
+      expose: true,
+    })
 }
 
 function sessionFiles(id) {
@@ -45,7 +46,11 @@ function sessionFiles(id) {
     .all(id)
 }
 function view(row) {
-  return { ...row, metadata: JSON.parse(row.metadata_json || '{}'), files: sessionFiles(row.id) }
+  return {
+    ...row,
+    metadata: JSON.parse(row.metadata_json || '{}'),
+    files: sessionFiles(row.id),
+  }
 }
 function owned(id, user) {
   const row = db
@@ -73,10 +78,11 @@ function discardActive(actor, item) {
   const [where, args] = targetWhere(item),
     rows = db
       .prepare(
-        `SELECT id FROM upload_sessions WHERE actor_id=? AND ${where} AND state IN ('uploading','completing')`,
+        `SELECT id,state FROM upload_sessions WHERE actor_id=? AND ${where} AND state IN ('uploading','completing')`,
       )
       .all(actor, ...args)
   for (const row of rows) {
+    if (row.state === 'completing') fail(409, '已有上传正在校验并保存，请稍后重试')
     discardSessionFiles(row.id, '放弃的分片上传')
   }
 }
@@ -106,8 +112,14 @@ function declaredFiles(list) {
 }
 function validateSubmission(payload, user, files) {
   if (user.role !== 'student') fail(403, '仅学生可提交作业')
-  const assignment = assignmentAccess(payload.assignment_id, user, { write: true })
+  const assignment = assignmentAccess(payload.assignment_id, user, {
+    write: true,
+  })
   if (assignment.status !== 'published') fail(400, '作业已关闭')
+  if (String(payload.metadata?.answer_question || '') !== (assignment.required_answer || ''))
+    fail(409, '作业必答题目已更新，请刷新页面后确认答案')
+  const answerError = requiredAnswerError(assignment.required_answer, payload.metadata?.content)
+  if (answerError) fail(400, answerError)
   subjectFor(assignment, user, { submit: true })
   const source = files.filter((file) => file.role === 'source'),
     previews = files.filter((file) => file.role === 'preview')
@@ -116,7 +128,7 @@ function validateSubmission(payload, user, files) {
   if (assignment.type !== 'online' && source.length !== 1) fail(400, '本作业需要上传一个源文件')
   if (
     source[0] &&
-    (source[0].size > (assignment.max_file_mb ?? 200) * 1024 * 1024 ||
+    (source[0].size > (assignment.max_file_mb ?? DEFAULT_ASSIGNMENT_FILE_MAX_MB) * 1024 * 1024 ||
       !allowedUploadName(source[0].name, {
         extensions: assignment.allowed_extensions?.split(',') || null,
       }))
@@ -125,8 +137,10 @@ function validateSubmission(payload, user, files) {
   if (
     assignment.require_preview_image &&
     (previews.length < 1 || previews.length > Number(assignment.preview_max_count ?? 3))
-  )
-    fail(400, `预览图需要上传 1-${assignment.preview_max_count ?? 3} 张`)
+  ) {
+    const max = Number(assignment.preview_max_count ?? 3)
+    fail(400, max === 1 ? '预览图需提交 1 张图片' : `预览图需提交 1–${max} 张图片`)
+  }
   if (!assignment.require_preview_image && previews.length) fail(400, '本作业不要求预览图')
   if (
     previews.some(
@@ -153,7 +167,10 @@ function validateMaterial(payload, user, files) {
     courseAccess(material.course_id, user, { write: true, teacher: true })
     courseId = material.course_id
   } else {
-    courseId = courseAccess(payload.course_id, user, { write: true, teacher: true }).id
+    courseId = courseAccess(payload.course_id, user, {
+      write: true,
+      teacher: true,
+    }).id
   }
   if (files.length !== 1 || files[0].role !== 'file') fail(400, '请选择一个课程资料文件')
   if (
@@ -167,8 +184,13 @@ function validateMaterial(payload, user, files) {
     courseId,
     materialId,
     metadata: {
-      title: textValue(payload.metadata?.title, '资料标题', 200),
-      description: textValue(payload.metadata?.description, '资料说明', 20000, false),
+      title: textValue(payload.metadata?.title, '资料标题', LIMITS.materialTitle),
+      description: textValue(
+        payload.metadata?.description,
+        '资料说明',
+        LIMITS.materialDescription,
+        false,
+      ),
     },
   }
 }
@@ -194,7 +216,7 @@ export function createUploadSession(payload, user) {
       discardActive(user.id, item)
       const at = nowText()
       db.prepare(
-        `INSERT INTO upload_sessions(id,actor_id,kind,assignment_id,course_id,material_id,mode,metadata_json,base_version,state,created_at,updated_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,'uploading',?,?,?)`,
+        "INSERT INTO upload_sessions(id,actor_id,kind,assignment_id,course_id,material_id,mode,metadata_json,base_version,state,created_at,updated_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,'uploading',?,?,?)",
       ).run(
         id,
         user.id,
@@ -278,8 +300,7 @@ export async function writeChunk({ sessionId, fileId, user, range, chunkHash, st
     const meter = new Transform({
       transform(chunk, _encoding, done) {
         bytes += chunk.length
-        if (bytes > length)
-          return done(Object.assign(new Error('分片超过声明大小'), { status: 400 }))
+        if (bytes > length) return done(httpError(400, '分片超过声明大小'))
         hash.update(chunk)
         done(null, chunk)
       },
@@ -324,10 +345,14 @@ export async function writeChunk({ sessionId, fileId, user, range, chunkHash, st
 function metadataFor(session, override) {
   const current = JSON.parse(session.metadata_json || '{}'),
     value = { ...current, ...(override || {}) }
-  if (session.kind === 'submission') return { content: String(value.content || '') }
+  if (session.kind === 'submission')
+    return {
+      content: String(value.content || ''),
+      answer_question: String(value.answer_question || ''),
+    }
   return {
-    title: textValue(value.title, '资料标题', 200),
-    description: textValue(value.description, '资料说明', 20000, false),
+    title: textValue(value.title, '资料标题', LIMITS.materialTitle),
+    description: textValue(value.description, '资料说明', LIMITS.materialDescription, false),
   }
 }
 function storedFile(row) {
@@ -431,6 +456,7 @@ export async function completeUploadSession(id, user, metadata) {
           sourceFile: source ? storedFile(source) : null,
           previewFiles: previews,
           content: finalMetadata.content,
+          answerQuestion: finalMetadata.answer_question,
           baseVersion: session.base_version,
           afterSave: finish,
         }),
@@ -464,6 +490,7 @@ export async function completeUploadSession(id, user, metadata) {
 export function cancelUploadSession(id, user) {
   const session = owned(id, user)
   if (session.state === 'succeeded') fail(409, '已完成的上传不能取消')
+  if (session.state === 'completing') fail(409, '文件正在校验并保存，不能取消')
   discardSessionFiles(session.id, '取消分片上传')
   fs.rmSync(sessionDirectory(session.id), { recursive: true, force: true })
   return { cancelled: true }

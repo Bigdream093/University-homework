@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron')
+const { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, shell } = require('electron')
 const fs = require('node:fs')
 const path = require('node:path')
 const { Readable, Transform } = require('node:stream')
@@ -38,7 +38,10 @@ function logUpdate(value) {
       fs.renameSync(file, `${file}.previous`)
     }
     const entry = value instanceof Error ? value.name : String(value)
-    fs.appendFileSync(file, `${new Date().toISOString()} ${clientRole} ${app.getVersion()} ${entry}\n`)
+    fs.appendFileSync(
+      file,
+      `${new Date().toISOString()} ${clientRole} ${app.getVersion()} ${entry}\n`,
+    )
   } catch {
     // Logging failures must not interrupt normal application use.
   }
@@ -61,6 +64,104 @@ function writeSettings(settings) {
   fs.writeFileSync(settingsPath(), `${JSON.stringify(settings, null, 2)}\n`, 'utf8')
 }
 
+function credentialStorePath() {
+  return path.join(app.getPath('userData'), 'saved-credentials.json')
+}
+
+function assertCredentialPage(event) {
+  if (!mainWindow || event.sender !== mainWindow.webContents)
+    throw new Error('仅登录页面可访问已保存的账号信息')
+  const senderUrl = event.senderFrame?.url || event.sender.getURL()
+  let senderOrigin = ''
+  try {
+    senderOrigin = new URL(senderUrl).origin
+  } catch {}
+  let serverOrigin = ''
+  try {
+    serverOrigin = new URL(readSettings().serverUrl).origin
+  } catch {}
+  if (!serverOrigin || senderOrigin !== serverOrigin)
+    throw new Error('当前页面不能访问已保存的账号信息')
+  return { serverOrigin, role: clientRole }
+}
+
+function readCredentialEntries() {
+  const file = credentialStorePath()
+  if (!fs.existsSync(file)) return {}
+  try {
+    const stored = JSON.parse(fs.readFileSync(file, 'utf8'))
+    return JSON.parse(safeStorage.decryptString(Buffer.from(stored.encrypted, 'base64')))
+  } catch {
+    return {}
+  }
+}
+
+function writeCredentialEntries(entries) {
+  const encrypted = safeStorage.encryptString(JSON.stringify(entries)).toString('base64')
+  fs.mkdirSync(path.dirname(credentialStorePath()), { recursive: true })
+  fs.writeFileSync(credentialStorePath(), `${JSON.stringify({ encrypted })}\n`, {
+    encoding: 'utf8',
+    mode: 0o600,
+  })
+}
+
+function credentialKey(context, username) {
+  return JSON.stringify([context.serverOrigin, context.role, username.trim().toLowerCase()])
+}
+
+function getSavedCredentials(event) {
+  const context = assertCredentialPage(event)
+  if (!safeStorage.isEncryptionAvailable()) return { available: false, credentials: null }
+  const entries = readCredentialEntries()
+  const saved = Object.entries(entries).find(([key]) => {
+    try {
+      const [origin, role] = JSON.parse(key)
+      return origin === context.serverOrigin && role === context.role
+    } catch {
+      return false
+    }
+  })?.[1]
+  return { available: true, credentials: saved || null }
+}
+
+function saveCredentials(event, input = {}) {
+  const context = assertCredentialPage(event)
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('当前系统没有可用的安全密码存储')
+  const username = String(input.username || '').trim()
+  const password = String(input.password || '')
+  if (!username || username.length > 200 || !password || password.length > 1000)
+    throw new Error('账号或密码格式无效')
+  const entries = readCredentialEntries()
+  const key = credentialKey(context, username)
+  for (const existingKey of Object.keys(entries)) {
+    try {
+      const [origin, role] = JSON.parse(existingKey)
+      if (origin === context.serverOrigin && role === context.role) delete entries[existingKey]
+    } catch {}
+  }
+  if (input.remember !== false) entries[key] = { username, password }
+  writeCredentialEntries(entries)
+  return { available: true }
+}
+
+function clearCredentials(event, input = {}) {
+  const context = assertCredentialPage(event)
+  if (!safeStorage.isEncryptionAvailable()) return { available: false }
+  const entries = readCredentialEntries()
+  const username = String(input.username || '').trim()
+  if (username) delete entries[credentialKey(context, username)]
+  else {
+    for (const key of Object.keys(entries)) {
+      try {
+        const [origin, role] = JSON.parse(key)
+        if (origin === context.serverOrigin && role === context.role) delete entries[key]
+      } catch {}
+    }
+  }
+  writeCredentialEntries(entries)
+  return { available: true }
+}
+
 function safePathSegment(value, fallback) {
   const cleaned = String(value || '')
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
@@ -69,12 +170,12 @@ function safePathSegment(value, fallback) {
   return cleaned || fallback
 }
 
-function uniquePath(parent, name) {
+function uniquePath(parent, name, isReserved = () => false) {
   const extension = path.extname(name)
   const stem = path.basename(name, extension)
   let candidate = path.join(parent, name)
   let index = 2
-  while (fs.existsSync(candidate)) {
+  while (fs.existsSync(candidate) || isReserved(candidate)) {
     candidate = path.join(parent, `${stem} (${index})${extension}`)
     index += 1
   }
@@ -227,7 +328,16 @@ async function transferFile(record) {
     )
     if (record.total && record.loaded !== record.total) throw new Error('下载未完成，请重试')
 
-    if (fs.existsSync(record.targetPath)) fs.rmSync(record.targetPath, { force: true })
+    if (fs.existsSync(record.targetPath))
+      record.targetPath = uniquePath(
+        path.dirname(record.targetPath),
+        path.basename(record.targetPath),
+        (candidate) =>
+          [...downloads.values()].some(
+            (other) => other !== record && other.targetPath === candidate,
+          ),
+      )
+    record.fileName = path.basename(record.targetPath)
     fs.renameSync(record.temporaryPath, record.targetPath)
     record.state = 'completed'
     publishDownload(record)
@@ -293,7 +403,9 @@ async function saveDownloadFile(event, payload) {
   const fileName = safePathSegment(payload?.fileName, '学习资料')
   const downloadFolder = app.getPath('downloads')
   fs.mkdirSync(downloadFolder, { recursive: true })
-  const targetPath = uniquePath(downloadFolder, fileName)
+  const targetPath = uniquePath(downloadFolder, fileName, (candidate) =>
+    [...downloads.values()].some((record) => record.targetPath === candidate),
+  )
   const temporaryPath = path.join(
     path.dirname(targetPath),
     `.${path.basename(targetPath)}.${requestId}.part`,
@@ -474,8 +586,14 @@ function createMenu() {
   ])
 }
 
-function configureNavigation(window, serverUrl) {
-  const allowedOrigin = new URL(serverUrl).origin
+function configureNavigation(window) {
+  const allowedOrigin = () => {
+    try {
+      return new URL(readSettings().serverUrl).origin
+    } catch {
+      return ''
+    }
+  }
   const openExternalHttp = (url) => {
     try {
       const parsed = new URL(url)
@@ -486,7 +604,7 @@ function configureNavigation(window, serverUrl) {
   }
   window.webContents.setWindowOpenHandler(({ url }) => {
     try {
-      if (new URL(url).origin === allowedOrigin) return { action: 'allow' }
+      if (new URL(url).origin === allowedOrigin()) return { action: 'allow' }
     } catch {}
     openExternalHttp(url)
     return { action: 'deny' }
@@ -494,7 +612,7 @@ function configureNavigation(window, serverUrl) {
   window.webContents.on('will-navigate', (event, url) => {
     let sameOrigin = false
     try {
-      sameOrigin = new URL(url).origin === allowedOrigin
+      sameOrigin = new URL(url).origin === allowedOrigin()
     } catch {}
     if (!sameOrigin) {
       event.preventDefault()
@@ -503,8 +621,9 @@ function configureNavigation(window, serverUrl) {
   })
 }
 
-async function handleLoadFailure(serverUrl, errorDescription) {
+async function handleLoadFailure(errorDescription) {
   if (handlingLoadFailure || setupWindow) return
+  const serverUrl = readSettings().serverUrl || ''
   handlingLoadFailure = true
   const result = await dialog.showMessageBox(mainWindow, {
     type: 'warning',
@@ -516,7 +635,7 @@ async function handleLoadFailure(serverUrl, errorDescription) {
     cancelId: 2,
   })
   handlingLoadFailure = false
-  if (result.response === 0) mainWindow?.loadURL(`${serverUrl}/?desktop=${clientRole}`)
+  if (result.response === 0 && serverUrl) mainWindow?.loadURL(`${serverUrl}/?desktop=${clientRole}`)
   else if (result.response === 1) openSetupWindow()
   else app.quit()
 }
@@ -547,11 +666,11 @@ function createMainWindow(serverUrl) {
   const currentAgent = mainWindow.webContents.getUserAgent()
   const roleAgent = clientRole === 'teacher' ? 'KexuTeacher' : 'KexuStudent'
   mainWindow.webContents.setUserAgent(`${currentAgent} ${roleAgent}/${app.getVersion()}`)
-  configureNavigation(mainWindow, serverUrl)
+  configureNavigation(mainWindow)
   mainWindow.webContents.on(
     'did-fail-load',
     (_event, errorCode, errorDescription, _url, isMainFrame) => {
-      if (isMainFrame && errorCode !== -3) handleLoadFailure(serverUrl, errorDescription)
+      if (isMainFrame && errorCode !== -3) handleLoadFailure(errorDescription)
     },
   )
   mainWindow.on('closed', () => {
@@ -598,51 +717,62 @@ app.on('second-instance', () => {
   if (window?.isMinimized()) window.restore()
   window?.focus()
 })
-if (hasInstanceLock) app.whenReady().then(() => {
-  updateController = createUpdateController({
-    app, dialog, shell, role: clientRole, baseUrl: metadata.updateBaseUrl || '',
-    onState: refreshUpdateMenu, log: logUpdate,
-    canInstall: () => ![...downloads.values()].some((record) =>
-      !['completed', 'failed', 'cancelled'].includes(record.state)),
-  })
-  Menu.setApplicationMenu(createMenu())
+if (hasInstanceLock)
+  app.whenReady().then(() => {
+    updateController = createUpdateController({
+      app,
+      dialog,
+      shell,
+      role: clientRole,
+      baseUrl: metadata.updateBaseUrl || '',
+      onState: refreshUpdateMenu,
+      log: logUpdate,
+      canInstall: () =>
+        ![...downloads.values()].some(
+          (record) => !['completed', 'failed', 'cancelled'].includes(record.state),
+        ),
+    })
+    Menu.setApplicationMenu(createMenu())
 
-  ipcMain.handle('settings:get', () => ({
-    role: clientRole,
-    roleName,
-    productName,
-    version: app.getVersion(),
-    serverUrl: readSettings().serverUrl || '',
-  }))
-  ipcMain.handle('server:test', (_event, serverUrl) => testServer(serverUrl))
-  ipcMain.handle('server:save', async (_event, input) => {
-    const result = await testServer(input)
-    writeSettings({ serverUrl: result.serverUrl })
-    setupWindow?.close()
-    createMainWindow(result.serverUrl)
-    return result
-  })
-  ipcMain.handle('download:save', (event, payload) => saveDownloadFile(event, payload))
-  ipcMain.handle('download:pause', pauseDownload)
-  ipcMain.handle('download:resume', resumeDownload)
-  ipcMain.handle('download:cancel', cancelDownload)
-  ipcMain.handle('download:open-folder', openDownloadFolder)
-  ipcMain.handle('download:open-downloads-folder', openDownloadsFolder)
-  ipcMain.handle('download:dismiss', dismissDownload)
-  ipcMain.handle('download:list', listDownloads)
+    ipcMain.handle('settings:get', () => ({
+      role: clientRole,
+      roleName,
+      productName,
+      version: app.getVersion(),
+      serverUrl: readSettings().serverUrl || '',
+    }))
+    ipcMain.handle('server:test', (_event, serverUrl) => testServer(serverUrl))
+    ipcMain.handle('server:save', async (_event, input) => {
+      const result = await testServer(input)
+      writeSettings({ serverUrl: result.serverUrl })
+      setupWindow?.close()
+      createMainWindow(result.serverUrl)
+      return result
+    })
+    ipcMain.handle('credentials:get', getSavedCredentials)
+    ipcMain.handle('credentials:save', (_event, input) => saveCredentials(_event, input))
+    ipcMain.handle('credentials:clear', (_event, input) => clearCredentials(_event, input))
+    ipcMain.handle('download:save', (event, payload) => saveDownloadFile(event, payload))
+    ipcMain.handle('download:pause', pauseDownload)
+    ipcMain.handle('download:resume', resumeDownload)
+    ipcMain.handle('download:cancel', cancelDownload)
+    ipcMain.handle('download:open-folder', openDownloadFolder)
+    ipcMain.handle('download:open-downloads-folder', openDownloadsFolder)
+    ipcMain.handle('download:dismiss', dismissDownload)
+    ipcMain.handle('download:list', listDownloads)
 
-  const serverUrl = readSettings().serverUrl
-  if (serverUrl) createMainWindow(serverUrl)
-  else openSetupWindow()
+    const serverUrl = readSettings().serverUrl
+    if (serverUrl) createMainWindow(serverUrl)
+    else openSetupWindow()
 
-  app.on('activate', () => {
-    if (!BrowserWindow.getAllWindows().length) {
-      const savedUrl = readSettings().serverUrl
-      if (savedUrl) createMainWindow(savedUrl)
-      else openSetupWindow()
-    }
+    app.on('activate', () => {
+      if (!BrowserWindow.getAllWindows().length) {
+        const savedUrl = readSettings().serverUrl
+        if (savedUrl) createMainWindow(savedUrl)
+        else openSetupWindow()
+      }
+    })
   })
-})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

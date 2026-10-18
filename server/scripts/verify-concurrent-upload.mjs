@@ -29,13 +29,17 @@ try {
   fs.closeSync(fd)
   const bearer = (token) => `Bearer ${token}`
   const teacher = (
-    await request(app).post('/api/auth/login').send({ username: 'teacher', password: '123456' })
+    await request(app)
+      .post('/api/auth/login')
+      .send({ username: 'teacher', password: '123456' })
+      .expect(200)
   ).body.token
   const course = (
     await request(app)
       .post('/api/courses')
       .set('Authorization', bearer(teacher))
       .send({ name: 'Concurrent upload verification' })
+      .expect(201)
   ).body
   const assignment = (
     await request(app)
@@ -44,9 +48,10 @@ try {
       .send({
         title: 'Concurrent upload verification',
         status: 'published',
-        max_file_mb: fileMb,
+        max_file_mb: [10, 20, 50, 100, 200, 500, 1024].find((limit) => limit >= fileMb),
         allow_resubmit_count: 0,
       })
+      .expect(201)
   ).body
   const tokens = []
   for (let index = 0; index < students; index++) {
@@ -120,12 +125,19 @@ try {
   delay.disable()
   const percentile = (values, percentileRank) => {
     const sorted = [...values].sort((leftValue, rightValue) => leftValue - rightValue)
-    return (
-      sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * percentileRank) - 1)] || 0
-    )
+    return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * percentileRank) - 1)] || 0
   }
   const statusCounts = {}
   for (const result of results) statusCounts[result.status] = (statusCounts[result.status] || 0) + 1
+  const submissionCount = db
+    .prepare('SELECT count(*) n FROM submissions WHERE assignment_id=?')
+    .get(assignment.id).n
+  const receiptCount = db
+    .prepare('SELECT count(*) n FROM submission_receipts WHERE assignment_id=?')
+    .get(assignment.id).n
+  const failures = results.filter((result) => result.status !== 201)
+  if (failures.length || submissionCount !== students || receiptCount !== students)
+    process.exitCode = 1
   const staging = path.join(process.env.UPLOAD_DIR, '.staging')
   console.log(
     JSON.stringify(
@@ -173,7 +185,7 @@ try {
           .prepare('SELECT count(*) n FROM submission_receipts WHERE assignment_id=?')
           .get(assignment.id).n,
         staging_files: fs.existsSync(staging) ? fs.readdirSync(staging).length : 0,
-        failures: results.filter((result) => result.status !== 201),
+        failures,
       },
       null,
       2,

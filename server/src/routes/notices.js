@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { auth } from '../middleware/auth.js'
 import { teacherOnly } from '../middleware/teacher.js'
+import { idValue } from '../services/access.js'
 import {
   listNotices,
   getNotice,
@@ -16,29 +17,31 @@ import {
 const router = Router()
 
 router.get('/courses/:id/notices', auth, (req, res) =>
-  listNotices(Number(req.params.id), req.user, res),
+  res.json(listNotices(idValue(req.params.id), req.user)),
 )
-router.get('/notices/:id', auth, (req, res) => getNotice(Number(req.params.id), req.user, res))
+router.get('/notices/:id', auth, (req, res) =>
+  res.json(getNotice(idValue(req.params.id), req.user)),
+)
 router.post('/notices/:id/read', auth, (req, res) =>
-  markRead(Number(req.params.id), req.user, res, req.body || {}),
+  res.json(markRead(idValue(req.params.id), req.user, req.body || {})),
 )
 router.get('/notices/:id/readers', auth, teacherOnly, (req, res) =>
-  readers(Number(req.params.id), req.user.id, res),
+  res.json(readers(idValue(req.params.id), req.user.id)),
 )
 router.post('/courses/:id/notices', auth, teacherOnly, (req, res) =>
-  createNotice(Number(req.params.id), req.user.id, req.body, res),
+  res.status(201).json(createNotice(idValue(req.params.id), req.user.id, req.body)),
 )
 router.put('/notices/:id', auth, teacherOnly, (req, res) =>
-  updateNotice(Number(req.params.id), req.user.id, req.body, res),
+  res.json(updateNotice(idValue(req.params.id), req.user.id, req.body)),
 )
 router.post('/notices/:id/withdraw', auth, teacherOnly, (req, res) =>
-  withdrawNotice(Number(req.params.id), req.user.id, req.body || {}, res),
+  res.json(withdrawNotice(idValue(req.params.id), req.user.id, req.body || {})),
 )
 router.delete('/notices/:id', auth, teacherOnly, (req, res) =>
-  deleteDraftNotice(Number(req.params.id), req.user.id, res),
+  res.json(deleteDraftNotice(idValue(req.params.id), req.user.id)),
 )
 router.post('/notices/:id/move', auth, teacherOnly, (req, res) =>
-  moveNotice(Number(req.params.id), req.user.id, req.body.direction, res),
+  res.json(moveNotice(idValue(req.params.id), req.user.id, req.body.direction)),
 )
 
 export default router

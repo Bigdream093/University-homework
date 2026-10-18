@@ -1,20 +1,17 @@
-import path from 'node:path'
+import { moveContent } from '../services/contentOrder.js'
 import { Router } from 'express'
-import jwt from 'jsonwebtoken'
 import { db } from '../db.js'
 import { auth } from '../middleware/auth.js'
 import { teacherOnly } from '../middleware/teacher.js'
 import { uploadSingle } from '../middleware/upload.js'
-import { safeName } from '../utils/fileFilter.js'
-import { courseAccess, fail, textValue, idValue } from '../services/access.js'
-import { deleteMaterial, materialView } from '../services/materialService.js'
+import { courseAccess, fail, idValue } from '../services/access.js'
+import { deleteMaterial, saveMaterial } from '../services/materialService.js'
 import { executeOperation, operationStatus } from '../services/operations.js'
 import { queueCleanup } from '../services/storage.js'
 import {
   serveMaterialFile,
   recordCompletedResumableDownload,
 } from '../services/materialFileService.js'
-import { nowText } from '../utils/time.js'
 import { config } from '../config.js'
 const router = Router()
 function limitMaterialUpload(req, _res, next) {
@@ -32,10 +29,22 @@ router.get('/courses/:id/materials', auth, (req, res) => {
   const course = courseAccess(req.params.id, req.user)
   res.json(
     db
-      .prepare('SELECT id FROM materials WHERE course_id=? ORDER BY id DESC')
-      .all(course.id)
-      .map(({ id }) => materialView(id)),
+      .prepare(
+        'SELECT m.id,m.title,m.description,m.file_name,m.file_size,m.file_type,m.created_at,COALESCE((SELECT SUM(download_count) FROM material_downloads d WHERE d.material_id=m.id),0) download_count FROM materials m WHERE m.course_id=? ORDER BY m.sort_order,m.id',
+      )
+      .all(course.id),
   )
+})
+router.post('/materials/:id/move', auth, teacherOnly, (req, res) => {
+  const row = material(idValue(req.params.id), req.user, true)
+  const moved = moveContent({
+    table: 'materials',
+    id: row.id,
+    scopeColumn: 'course_id',
+    scopeId: row.course_id,
+    direction: req.body.direction,
+  })
+  res.json({ moved })
 })
 router.post(
   '/courses/:id/materials',
@@ -50,27 +59,15 @@ router.post(
   async (req, res) => {
     try {
       const course = courseAccess(req.params.id, req.user, { write: true })
-      const data = await executeOperation(req, 'material-create', course.id, () => {
-        // 权限已在路由预检与 executeOperation 内两次确认，事务动作内不再重复检查。
-        if (!req.file) fail(400, '请选择资料文件')
-        const file = req.file
-        const id = db
-          .prepare(
-            'INSERT INTO materials(course_id,teacher_id,title,description,file_url,file_name,file_size,file_type,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
-          )
-          .run(
-            course.id,
-            req.user.id,
-            textValue(req.body.title, '资料标题', 200),
-            textValue(req.body.description, '资料说明', 20000, false),
-            file.storageKey,
-            safeName(file.originalname),
-            file.size,
-            path.extname(file.originalname).slice(1).toLowerCase(),
-            nowText(),
-          ).lastInsertRowid
-        return materialView(id)
-      })
+      const data = await executeOperation(req, 'material-create', course.id, () =>
+        saveMaterial({
+          mode: 'create',
+          courseId: course.id,
+          user: req.user,
+          file: req.file,
+          metadata: req.body,
+        }),
+      )
       res.status(data.replayed ? 200 : 201).json(data)
     } catch (error) {
       if (req.file) queueCleanup([req.file.path], '失败上传')
@@ -91,23 +88,16 @@ router.put(
   async (req, res) => {
     try {
       const materialRecord = material(req.params.id, req.user, true),
-        data = await executeOperation(req, 'material-update', materialRecord.id, () => {
-          const current = material(materialRecord.id, req.user, true),
-            file = req.file
-          db.prepare(
-            'UPDATE materials SET title=?,description=?,file_url=?,file_name=?,file_size=?,file_type=? WHERE id=?',
-          ).run(
-            textValue(req.body.title ?? current.title, '资料标题', 200),
-            textValue(req.body.description ?? current.description, '说明', 20000, false),
-            file?.storageKey || current.file_url,
-            file ? safeName(file.originalname) : current.file_name,
-            file?.size ?? current.file_size,
-            file ? path.extname(file.originalname).slice(1).toLowerCase() : current.file_type,
-            current.id,
-          )
-          if (file) queueCleanup([current.file_url], '资料替换')
-          return materialView(current.id)
-        })
+        data = await executeOperation(req, 'material-update', materialRecord.id, () =>
+          saveMaterial({
+            mode: 'update',
+            courseId: materialRecord.course_id,
+            materialId: materialRecord.id,
+            user: req.user,
+            file: req.file,
+            metadata: req.body,
+          }),
+        )
       res.json(data)
     } catch (error) {
       if (req.file) queueCleanup([req.file.path], '失败上传')
@@ -137,31 +127,8 @@ router.get('/materials/:id/downloads', auth, teacherOnly, (req, res) => {
       .all(materialRecord.id),
   )
 })
-router.post('/materials/:id/download-ticket', auth, (req, res) => {
-  const materialRecord = material(req.params.id, req.user)
-  const ticket = jwt.sign(
-    { purpose: 'material-download', materialId: materialRecord.id, userId: req.user.id },
-    config.jwtSecret,
-    { expiresIn: '5m' },
-  )
-  res.json({ url: `/api/material-files/${ticket}` })
-})
-router.get('/material-files/:ticket', (req, res, next) => {
-  try {
-    const payload = jwt.verify(req.params.ticket, config.jwtSecret)
-    if (payload.purpose !== 'material-download') fail(401, '下载凭证无效')
-    const user = db
-      .prepare('SELECT id,username,name,role,status,must_change_password FROM users WHERE id=?')
-      .get(payload.userId)
-    if (!user || user.status !== 'active') fail(401, '账号不存在或已停用')
-    serveMaterialFile(Number(payload.materialId), user, res, req, next)
-  } catch (error) {
-    if (error.status) next(error)
-    else next(Object.assign(new Error('下载凭证已失效，请重新下载'), { status: 401 }))
-  }
-})
 router.get('/materials/:id/file', auth, (req, res, next) =>
-  serveMaterialFile(Number(req.params.id), req.user, res, req, next),
+  serveMaterialFile(idValue(req.params.id), req.user, res, req, next),
 )
 // 桌面端断点下载在文件成功落盘后调用，按凭证编号去重只计一次。
 router.post('/materials/:id/download-completed', auth, (req, res) => {

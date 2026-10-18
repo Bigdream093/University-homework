@@ -1,10 +1,20 @@
 const { updateDirectory, fetchMacManifest } = require('./update-policy.cjs')
 
 // Construction registers no timers and performs no network requests.
-function createUpdateController({ app, dialog, shell, role, baseUrl,
-  platform = process.platform, arch = process.arch,
+function createUpdateController({
+  app,
+  dialog,
+  shell,
+  role,
+  baseUrl,
+  platform = process.platform,
+  arch = process.arch,
   getWindowsUpdater = () => require('electron-updater').autoUpdater,
-  fetchImpl, onState = () => {}, canInstall = () => true, log = () => {} }) {
+  fetchImpl,
+  onState = () => {},
+  canInstall = () => true,
+  log = () => {},
+}) {
   let state = 'idle'
   let progress = 0
   let updater
@@ -26,8 +36,11 @@ function createUpdateController({ app, dialog, shell, role, baseUrl,
     failureShown = true
     // Avoid logging server response bodies or request headers containing user data.
     log(`failure:${String(error?.code || error?.name || 'Error')}`)
-    await notify('更新未完成，请稍后重试',
-      '请检查网络、更新服务器和磁盘空间。当前版本仍可继续使用。', 'warning')
+    await notify(
+      '更新未完成，请稍后重试',
+      '请检查网络、更新服务器和磁盘空间。当前版本仍可继续使用。',
+      'warning',
+    )
   }
   function initializeWindows() {
     if (updater) return updater
@@ -51,7 +64,9 @@ function createUpdateController({ app, dialog, shell, role, baseUrl,
       void notify('新版本已下载', '保存当前工作后，请选择“帮助 → 重启并更新”。').catch(log)
     })
     updater.on('update-cancelled', () => setState('idle'))
-    updater.on('error', (error) => { void fail(error).catch(log) })
+    updater.on('error', (error) => {
+      void fail(error).catch(log)
+    })
     return updater
   }
   async function check() {
@@ -79,9 +94,13 @@ function createUpdateController({ app, dialog, shell, role, baseUrl,
           await notify('当前已是最新版本', `当前版本：${app.getVersion()}`)
         } else {
           const choice = await dialog.showMessageBox({
-            type: 'info', title: '软件更新', message: `发现新版本 ${info.version}`,
+            type: 'info',
+            title: '软件更新',
+            message: `发现新版本 ${info.version}`,
             detail: `当前版本：${app.getVersion()}\n${info.notes || ''}\n\n下载并打开 DMG 后，请退出墨痕学生端，将其中的应用拖入“应用程序”文件夹（或原安装位置）并替换，再从安装位置启动。`,
-            buttons: ['下载 DMG', '稍后'], defaultId: 1, cancelId: 1,
+            buttons: ['下载 DMG', '稍后'],
+            defaultId: 1,
+            cancelId: 1,
           })
           if (choice.response === 0) await shell.openExternal(info.url)
         }
@@ -99,13 +118,21 @@ function createUpdateController({ app, dialog, shell, role, baseUrl,
     installing = true
     try {
       if (!canInstall()) {
-        await notify('请先完成或取消资料下载', '当前还有未完成的资料下载，暂不能重启更新。', 'warning')
+        await notify(
+          '请先完成或取消资料下载',
+          '当前还有未完成的资料下载，暂不能重启更新。',
+          'warning',
+        )
         return
       }
       const choice = await dialog.showMessageBox({
-        type: 'question', title: '重启并更新', message: '已保存工作并完成所有上传、提交？',
+        type: 'question',
+        title: '重启并更新',
+        message: '已保存工作并完成所有上传、提交？',
         detail: '更新会关闭应用。请确认批改、编辑内容已经保存，作业提交和资料上传均已完成。',
-        buttons: ['已确认，重启并更新', '稍后'], defaultId: 1, cancelId: 1,
+        buttons: ['已确认，重启并更新', '稍后'],
+        defaultId: 1,
+        cancelId: 1,
       })
       if (choice.response !== 0) return
       if (!canInstall()) {
@@ -120,16 +147,32 @@ function createUpdateController({ app, dialog, shell, role, baseUrl,
     }
   }
   return {
-    check, install,
+    check,
+    install,
     getState: () => state,
     menuItems: () => [
-      { id: 'check-for-updates', label: state === 'checking' ? '正在检查更新…'
-        : state === 'downloading' ? `正在下载更新 ${progress}%` : '检查更新',
-      enabled: !operation && !['checking', 'downloading', 'downloaded'].includes(state),
-      click: () => { void check().catch(log) } },
-      { id: 'install-update', label: '重启并更新',
+      {
+        id: 'check-for-updates',
+        label:
+          state === 'checking'
+            ? '正在检查更新…'
+            : state === 'downloading'
+              ? `正在下载更新 ${progress}%`
+              : '检查更新',
+        enabled: !operation && !['checking', 'downloading', 'downloaded'].includes(state),
+        click: () => {
+          void check().catch(log)
+        },
+      },
+      {
+        id: 'install-update',
+        label: '重启并更新',
         visible: platform === 'win32' && state === 'downloaded',
-        enabled: state === 'downloaded', click: () => { void install().catch(log) } },
+        enabled: state === 'downloaded',
+        click: () => {
+          void install().catch(log)
+        },
+      },
     ],
   }
 }

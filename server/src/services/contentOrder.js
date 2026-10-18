@@ -15,11 +15,13 @@ export function moveContent({
   direction,
   extraWhere = '',
   extraArgs = [],
+  currentWhere = extraWhere,
+  currentArgs = extraArgs,
 }) {
   if (!['up', 'down'].includes(direction)) fail(400, '移动方向无效')
   const current = db
-    .prepare(`SELECT id,sort_order FROM ${table} WHERE id=? AND ${scopeColumn}=? ${extraWhere}`)
-    .get(id, scopeId, ...extraArgs)
+    .prepare(`SELECT id,sort_order FROM ${table} WHERE id=? AND ${scopeColumn}=? ${currentWhere}`)
+    .get(id, scopeId, ...currentArgs)
   if (!current) fail(404, '内容不存在')
   const operator = direction === 'up' ? '<' : '>'
   const order = direction === 'up' ? 'DESC' : 'ASC'

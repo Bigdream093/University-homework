@@ -1,5 +1,6 @@
 <script setup>
 import RichTextContent from './RichTextContent.vue'
+import RequiredAnswerContent from './RequiredAnswerContent.vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api, { messageOf } from '../api/request.js'
@@ -12,6 +13,8 @@ defineProps({
 const emit = defineEmits(['edit', 'changed'])
 const router = useRouter()
 const assignmentCard = useCollapse()
+const isDialogDismissal = (error) =>
+  ['cancel', 'close'].includes(error) || ['cancel', 'close'].includes(error?.message)
 function formatExtensions(value) {
   return String(value || '')
     .split(',')
@@ -25,10 +28,12 @@ async function assignmentAction(assignment, action) {
       await ElMessageBox.confirm('确认删除这项作业？', '确认', { type: 'warning' })
       await api.delete(`/assignments/${assignment.id}`)
     } else await api.post(`/assignments/${assignment.id}/${action}`)
-    ElMessage.success(action === 'publish' ? '作业已发布' : '作业已关闭')
+    ElMessage.success(
+      action === 'publish' ? '作业已发布' : action === 'delete' ? '作业已删除' : '作业已关闭',
+    )
     emit('changed')
   } catch (error) {
-    if (error !== 'cancel') ElMessage.error(messageOf(error))
+    if (!isDialogDismissal(error)) ElMessage.error(messageOf(error))
   }
 }
 async function moveAssignment(assignment, direction) {
@@ -52,13 +57,30 @@ async function moveAssignment(assignment, direction) {
           <span class="badge">{{
             { draft: '草稿', published: '已发布', closed: '已关闭' }[assignment.status]
           }}</span
-          ><span v-if="assignment.status !== 'draft'" class="badge"
-            >{{ assignment.unsubmitted_count }}/{{ assignment.expected_count }} 未交</span
-          ><span v-if="assignment.status !== 'draft'" class="badge"
-            >{{ assignment.pending_review_count }}/{{ assignment.expected_count }} 待批改</span
+          ><span v-if="assignment.status !== 'draft'" class="badge" :title="assignment.title"
+            >未交 {{ assignment.unsubmitted_count }}
+            {{ assignment.work_mode === 'group' ? '组' : '人' }}</span
+          ><span
+            v-if="assignment.status !== 'draft'"
+            class="badge pending-review-link"
+            role="link"
+            tabindex="0"
+            @click.stop="
+              router.push({
+                path: `/teacher/assignments/${assignment.id}`,
+                query: { filter: 'submitted' },
+              })
+            "
+            @keydown.enter.stop="
+              router.push({
+                path: `/teacher/assignments/${assignment.id}`,
+                query: { filter: 'submitted' },
+              })
+            "
+            >待批改 {{ assignment.pending_review_count }} 份</span
           >
           <h3 class="card-title">{{ assignment.title }}</h3>
-          <span class="hint">截止：{{ assignment.deadline || '不限' }}</span
+          <span class="hint card-meta">截止：{{ assignment.deadline || '不限' }}</span
           ><el-button-group @click.stop
             ><el-button
               size="small"
@@ -86,11 +108,16 @@ async function moveAssignment(assignment, direction) {
             :content="assignment.description || '暂无作业说明'"
             :format="assignment.description_format"
           />
+          <RequiredAnswerContent
+            v-if="assignment.required_answer"
+            :questions="assignment.required_answer"
+            :show-answers="false"
+          />
           <span class="hint" style="display: block; margin-bottom: 12px"
             >{{ assignment.work_mode === 'group' ? '分组作业' : '个人作业' }} · 满分{{
               assignment.total_score
             }}
-            · 可重交{{
+            · 学生自行重交{{
               assignment.allow_resubmit_count === -1
                 ? '不限'
                 : assignment.allow_resubmit_count + '次'
@@ -103,8 +130,13 @@ async function moveAssignment(assignment, direction) {
             ><template v-if="assignment.allowed_extensions">
               · 限交后缀：{{ formatExtensions(assignment.allowed_extensions) }}</template
             ><template v-if="Number(assignment.require_preview_image) === 1">
-              · 需交预览图 1-{{ assignment.preview_max_count }} 张（jpg/png）</template
-            ></span
+              <template v-if="Number(assignment.preview_max_count ?? 3) === 1">
+                · 需提交 1 张图片（仅支持jpg/png）
+              </template>
+              <template v-else>
+                · 需提交 1–{{ Number(assignment.preview_max_count ?? 3) }} 张图片（仅支持jpg/png）
+              </template>
+            </template></span
           >
           <div class="assignment-actions">
             <AssignmentGroups

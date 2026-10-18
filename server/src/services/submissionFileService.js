@@ -2,6 +2,8 @@ import { db } from '../db.js'
 import { fail, idValue } from './access.js'
 import { receipts, submissionAccess } from './submissionQueries.js'
 import { resolveUploadPath } from '../utils/uploadPath.js'
+import { cleanLegacyTimelinessSuffix } from '../utils/fileFilter.js'
+import { formatRequiredAnswerText } from '@university-homework/domain/requiredAnswers'
 
 export function serveSubmissionFile({
   submissionId,
@@ -23,12 +25,14 @@ export function serveSubmissionFile({
   if (row.file_url) {
     const file = resolveUploadPath(row.file_url, { mustExist: true })
     if (!file) fail(404, '文件不存在')
-    return res.download(file, row.file_name, (error) => {
+    return res.download(file, cleanLegacyTimelinessSuffix(row.file_name), (error) => {
       if (error && !res.headersSent) next(error)
     })
   }
-  if (row.content)
-    return res.attachment('answer.txt').type('text/plain; charset=utf-8').send(row.content)
+  if (row.content) {
+    const answer = formatRequiredAnswerText(row.answer_question, row.content)
+    return res.attachment('answer.txt').type('text/plain; charset=utf-8').send(answer)
+  }
   fail(404, '文件不存在')
 }
 
@@ -39,5 +43,9 @@ export function serveSubmissionReceipt({ submissionId, receiptNumber, group, use
   return res
     .attachment(`${receipt.receipt_no}.txt`)
     .type('text/plain; charset=utf-8')
-    .send(JSON.stringify(receipt, null, 2))
+    .send(
+      (receipt.snapshot.answer_question
+        ? `${formatRequiredAnswerText(receipt.snapshot.answer_question, receipt.snapshot.answer)}\n\n提交回执：\n`
+        : '') + JSON.stringify(receipt, null, 2),
+    )
 }

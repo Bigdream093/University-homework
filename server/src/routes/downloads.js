@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken'
 import { config } from '../config.js'
 import { db } from '../db.js'
 import { auth } from '../middleware/auth.js'
+import { httpError } from '../utils/httpError.js'
 import { courseAccess, fail, idValue } from '../services/access.js'
 import { serveMaterialFile } from '../services/materialFileService.js'
 import { downloadAssignmentPackage, downloadSubmissionPackage } from '../services/packageService.js'
@@ -106,7 +107,7 @@ router.get('/download-files/:ticket', async (req, res, next) => {
   } catch (error) {
     if (error.status) next(error)
     else if (['JsonWebTokenError', 'TokenExpiredError', 'NotBeforeError'].includes(error.name))
-      next(Object.assign(new Error('下载凭证已失效，请重新下载'), { status: 401 }))
+      next(httpError(401, '下载凭证已失效，请重新下载'))
     else next(error)
   }
 })

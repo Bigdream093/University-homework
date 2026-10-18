@@ -23,6 +23,11 @@ const routes = [
     meta: { role: 'teacher' },
   },
   {
+    path: '/teacher/reviews',
+    component: () => import('../views/teacher/ReviewInbox.vue'),
+    meta: { role: 'teacher' },
+  },
+  {
     path: '/student/courses',
     component: () => import('../views/student/StudentCourses.vue'),
     meta: { role: 'student' },

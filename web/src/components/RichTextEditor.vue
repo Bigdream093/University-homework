@@ -1,4 +1,5 @@
 <script setup>
+import { EDITOR_IMAGE_MAX_BYTES } from '@university-homework/domain/limits'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { EditorContent, VueNodeViewRenderer, useEditor } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
@@ -27,6 +28,7 @@ const picker = ref(null)
 const dragging = ref(false)
 const busy = computed(() => pending.value || failures.value.length > 0)
 let controller
+let lastEditorHtml = model.value || ''
 
 const AuthImage = Image.extend({
   addNodeView() {
@@ -35,21 +37,15 @@ const AuthImage = Image.extend({
 })
 
 function transferImages(transfer) {
-  const found = []
-  const keys = new Set()
-  const add = (file) => {
-    if (!file || !file.type?.startsWith('image/')) return
-    const key = `${file.name}|${file.type}|${file.size}|${file.lastModified}`
-    if (!keys.has(key)) {
-      keys.add(key)
-      found.push(file)
-    }
-  }
-  for (const file of transfer?.files || []) add(file)
-  for (const item of transfer?.items || []) {
-    if (item.kind === 'file' && item.type?.startsWith('image/')) add(item.getAsFile?.())
-  }
-  return found
+  const isImage = (file) => file?.type?.startsWith('image/')
+  const files = [...(transfer?.files || [])].filter(isImage)
+  // files 和 items 是同一批文件的两种入口；仅在 files 没有图片时回退。
+  // 不按元数据去重：包装对象的时间戳可能不同，多张真实图片也可能元数据相同。
+  if (files.length) return files
+  return [...(transfer?.items || [])]
+    .filter((item) => item.kind === 'file' && item.type?.startsWith('image/'))
+    .map((item) => item.getAsFile?.())
+    .filter(isImage)
 }
 
 async function uploadFiles(files, position) {
@@ -64,7 +60,7 @@ async function uploadFiles(files, position) {
     if (signal.aborted) break
     if (
       !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) ||
-      file.size > 10 * 1024 * 1024
+      file.size > EDITOR_IMAGE_MAX_BYTES
     ) {
       ElMessage.warning(`${file.name || '剪贴板图片'}：仅支持 JPG、PNG、WebP，单张不超过 10 MB`)
       continue
@@ -133,13 +129,17 @@ const editor = useEditor({
     },
   },
   onUpdate: ({ editor: current }) => {
-    model.value = current.getHTML()
+    lastEditorHtml = current.getHTML()
+    model.value = lastEditorHtml
   },
 })
 
 watch(model, (value) => {
-  if (editor.value && value !== editor.value.getHTML())
-    editor.value.commands.setContent(value || '', { emitUpdate: false })
+  const next = value || ''
+  if (editor.value && next !== lastEditorHtml) {
+    lastEditorHtml = next
+    editor.value.commands.setContent(next, { emitUpdate: false })
+  }
 })
 function command(run) {
   run(editor.value?.chain().focus())?.run()
@@ -245,7 +245,7 @@ onBeforeUnmount(() => {
       <label class="color-control"
         >文字色<input type="color" @input="command((c) => c.setColor($event.target.value))"
       /></label>
-      <el-button size="small" @click="picker.click()">插入图片</el-button>
+      <el-button size="small" :disabled="pending" @click="picker.click()">插入图片</el-button>
       <el-button
         size="small"
         @click="command((c) => c.insertTable({ rows: 3, cols: 3, withHeaderRow: true }))"
@@ -284,19 +284,32 @@ onBeforeUnmount(() => {
         @change="choose"
       />
     </div>
+    <p class="editor-guidance">
+      <strong>图片上传</strong>
+      支持 JPG、PNG、WebP，单张不超过 10 MB；可点击“插入图片”、粘贴截图或拖入图片。
+    </p>
     <div class="editor-frame">
       <EditorContent :editor="editor" />
-      <div v-if="dragging" class="drop-mask">松开以上传图片</div>
+      <div v-if="dragging" class="drop-mask">松开即可插入图片</div>
     </div>
-    <p class="editor-hint">
-      可直接编辑排版；支持选择图片、粘贴截图或 PPT
-      图片、拖入图片。表格可合并、拆分单元格并拖动列边界。
-    </p>
-    <div v-if="pending" role="status">正在上传图片 {{ progress }}%，完成后可保存正文。</div>
-    <div v-if="failures.length" role="alert">
-      {{ failures.length }} 张图片上传失败。<el-button :disabled="pending" @click="retry"
-        >重试</el-button
-      ><el-button :disabled="pending" @click="discard">忽略</el-button>
+    <p class="editor-hint">可直接编辑排版；表格支持合并、拆分单元格并拖动列边界。</p>
+    <div v-if="pending" class="image-upload-status" role="status" aria-live="polite">
+      <div class="image-upload-status__heading">
+        <strong>正在上传图片</strong>
+        <span>{{ progress }}%</span>
+      </div>
+      <el-progress :percentage="progress" :show-text="false" :stroke-width="8" color="#15554e" />
+      <p>上传完成后即可保存正文，请稍候。</p>
+    </div>
+    <div v-if="failures.length" class="image-upload-failures" role="alert">
+      <div>
+        <strong>{{ failures.length }} 张图片未上传成功</strong>
+        <p>请重试，或移除失败图片后再保存。</p>
+      </div>
+      <div class="image-upload-failures__actions">
+        <el-button size="small" :disabled="pending" @click="retry">重试上传</el-button>
+        <el-button size="small" :disabled="pending" @click="discard">移除失败图片</el-button>
+      </div>
     </div>
   </div>
 </template>
@@ -349,6 +362,69 @@ onBeforeUnmount(() => {
   border: 1px solid #dcdfe6;
   border-radius: 4px;
   background: white;
+}
+.editor-guidance {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid #dce9e3;
+  border-radius: 8px;
+  background: #f5faf7;
+  color: #607873;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.editor-guidance strong {
+  color: #28574f;
+}
+.image-upload-status,
+.image-upload-failures {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border-radius: 9px;
+}
+.image-upload-status {
+  border: 1px solid #d5e7df;
+  background: #f3faf6;
+  color: #28574f;
+}
+.image-upload-status__heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 7px;
+  font-size: 14px;
+}
+.image-upload-status__heading span {
+  font-variant-numeric: tabular-nums;
+}
+.image-upload-status p,
+.image-upload-failures p {
+  margin: 6px 0 0;
+  color: #647873;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.image-upload-failures {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  border: 1px solid #f0d3cc;
+  background: #fff7f4;
+  color: #9d4a36;
+}
+.image-upload-failures__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.image-upload-failures__actions :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 .rich-text-editor :deep(.rich-editor-surface) {
   min-height: 420px;
@@ -418,8 +494,8 @@ onBeforeUnmount(() => {
 }
 .editor-hint {
   margin: 8px 0;
-  color: #606266;
-  font-size: 12px;
+  color: #647873;
+  font-size: 13px;
   line-height: 1.6;
 }
 .fullscreen .editor-frame {

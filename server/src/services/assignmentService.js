@@ -1,23 +1,34 @@
 import { validateEditorImages } from '../services/editorImageAccess.js'
 import { contentFormat } from '../domain/contentFormat.js'
+import { DEFAULT_ASSIGNMENT_FILE_MAX_MB, LIMITS } from '@university-homework/domain/limits'
 import { db } from '../db.js'
-import { contentValue, courseAccess, assignmentAccess, textValue, fail, requireRole } from './access.js'
+import {
+  contentValue,
+  courseAccess,
+  assignmentAccess,
+  textValue,
+  fail,
+  requireRole,
+} from './access.js'
 import { nowText, validTime } from '../utils/time.js'
 import { parseAllowedExtensions } from '../utils/fileFilter.js'
 import { moveContent, nextOrder } from './contentOrder.js'
 import { deleteAssignment } from './deletionService.js'
+import { questionDefinitionError } from '@university-homework/domain/requiredAnswers'
 
-const FILE_SIZE_OPTIONS = [10, 20, 50, 100, 200, 500, 1024]
+const FILE_SIZE_OPTIONS = [10, 20, 50, 100, DEFAULT_ASSIGNMENT_FILE_MAX_MB, 500, 1024]
+const FILE_SIZE_OPTION_LABELS = FILE_SIZE_OPTIONS.map((size) => (size === 1024 ? '1G' : `${size}M`))
+const FILE_SIZE_OPTIONS_LABEL = `${FILE_SIZE_OPTION_LABELS.slice(0, -1).join('、')} 或 ${FILE_SIZE_OPTION_LABELS.at(-1)}`
 function assignmentFields(body, current = {}) {
   const input = { ...current, ...body }
-  const title = textValue(input.title, '作业标题', 200),
+  const title = textValue(input.title, '作业标题', LIMITS.assignmentTitle),
     deadline = input.deadline || null
-  const maxFileMb = Number(input.max_file_mb ?? 200),
+  const maxFileMb = Number(input.max_file_mb ?? DEFAULT_ASSIGNMENT_FILE_MAX_MB),
     totalScore = Number(input.total_score ?? 100),
     allowResubmit = Number(input.allow_resubmit_count ?? 1)
   if (deadline && !validTime(deadline)) fail(400, '截止时间格式无效')
   if (!FILE_SIZE_OPTIONS.includes(maxFileMb))
-    fail(400, '文件大小上限只能是 10M、20M、50M、100M、200M、500M 或 1G')
+    fail(400, `文件大小上限只能是 ${FILE_SIZE_OPTIONS_LABEL}`)
   if (
     !Number.isFinite(totalScore) ||
     totalScore <= 0 ||
@@ -53,9 +64,13 @@ function assignmentFields(body, current = {}) {
   if (!Number.isInteger(previewMax) || previewMax < 1 || previewMax > 10)
     fail(400, '预览图上限必须是1到10张')
   const format = contentFormat(input.description_format)
+  const requiredAnswer =
+    textValue(input.required_answer, '必答题目', LIMITS.requiredAnswer, false) || null
+  const questionError = questionDefinitionError(requiredAnswer)
+  if (questionError) fail(400, questionError)
   return [
     title,
-    contentValue(input.description, format, '作业要求', 50000, false),
+    contentValue(input.description, format, '作业要求', LIMITS.richText, false),
     type,
     deadline,
     totalScore,
@@ -68,6 +83,7 @@ function assignmentFields(body, current = {}) {
     requirePreview,
     previewMax,
     format,
+    requiredAnswer,
   ]
 }
 function publishValidatedAssignment(assignment) {
@@ -109,7 +125,7 @@ export function createAssignment(courseId, user, body) {
     validateEditorImages(fields[1], fields[13], user)
     const inserted = db
       .prepare(
-        "INSERT INTO assignments(course_id,title,description,type,deadline,total_score,allow_resubmit_count,submission_mode,max_file_mb,work_mode,group_submit_policy,allowed_extensions,require_preview_image,preview_max_count,description_format,grade_weight,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,'draft',?,?,?)",
+        "INSERT INTO assignments(course_id,title,description,type,deadline,total_score,allow_resubmit_count,submission_mode,max_file_mb,work_mode,group_submit_policy,allowed_extensions,require_preview_image,preview_max_count,description_format,required_answer,grade_weight,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,'draft',?,?,?)",
       )
       .run(
         course.id,
@@ -132,7 +148,7 @@ export function updateAssignment(assignmentId, user, body) {
     validateEditorImages(fields[1], fields[13], user)
     const at = nowText()
     db.prepare(
-      'UPDATE assignments SET title=?,description=?,type=?,deadline=?,total_score=?,allow_resubmit_count=?,submission_mode=?,max_file_mb=?,work_mode=?,group_submit_policy=?,allowed_extensions=?,require_preview_image=?,preview_max_count=?,description_format=?,updated_at=? WHERE id=?',
+      'UPDATE assignments SET title=?,description=?,type=?,deadline=?,total_score=?,allow_resubmit_count=?,submission_mode=?,max_file_mb=?,work_mode=?,group_submit_policy=?,allowed_extensions=?,require_preview_image=?,preview_max_count=?,description_format=?,required_answer=?,updated_at=? WHERE id=?',
     ).run(...fields, at, assignment.id)
     const cancelled =
       assignment.deadline && !fields[3]

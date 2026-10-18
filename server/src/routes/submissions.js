@@ -1,35 +1,56 @@
 import { Router } from 'express'
-import { db } from '../db.js'
 import { auth } from '../middleware/auth.js'
 import { studentOnly } from '../middleware/teacher.js'
 import { uploadSubmissionFiles } from '../middleware/upload.js'
 import { saveSubmission } from '../services/submissionLogic.js'
 import { assignmentAccess, subjectFor, fail } from '../services/access.js'
+import { getAssignment } from '../services/assignmentService.js'
 import {
   submissionAccess,
   historyRows,
   receipts,
   studentView,
+  currentSubmission,
+  studentAssignmentContext,
 } from '../services/submissionQueries.js'
 import { effectiveDeadline } from '../services/extensions.js'
 import { executeOperation, operationStatus } from '../services/operations.js'
 import { queueCleanup } from '../services/storage.js'
 import { serveSubmissionFile, serveSubmissionReceipt } from '../services/submissionFileService.js'
+import { isLate, nowText } from '../utils/time.js'
+import { DEFAULT_ASSIGNMENT_FILE_MAX_MB } from '@university-homework/domain/limits'
 const router = Router()
+router.get('/assignments/:id/student-page', auth, studentOnly, (req, res) => {
+  const assignment = getAssignment(req.params.id, req.user),
+    subject = subjectFor(assignment, req.user),
+    row = currentSubmission(assignment, subject, req.user.id),
+    context = studentAssignmentContext(assignment, subject)
+  res.json({
+    assignment,
+    context,
+    submission: row
+      ? {
+          ...studentView({
+            ...row,
+            kind: subject.group ? 'group' : 'individual',
+          }),
+          can_submit: subject.can_submit,
+          effective_deadline: context.effective_deadline,
+        }
+      : null,
+  })
+})
 router.get('/assignments/:id/my-submission', auth, studentOnly, (req, res) => {
   const assignment = assignmentAccess(req.params.id, req.user),
     subject = subjectFor(assignment, req.user)
-  const row = subject.not_assigned
-    ? null
-    : subject.group
-      ? db.prepare('SELECT * FROM group_submissions WHERE assignment_group_id=?').get(subject.group.id)
-      : db
-          .prepare('SELECT * FROM submissions WHERE assignment_id=? AND student_id=?')
-          .get(assignment.id, req.user.id)
+  const row = currentSubmission(assignment, subject, req.user.id)
   res.json(
     row
       ? {
-          ...studentView({ ...row, kind: subject.group ? 'group' : 'individual' }),
+          ...studentView({
+            ...row,
+            kind: subject.group ? 'group' : 'individual',
+          }),
           can_submit: subject.can_submit,
           effective_deadline: effectiveDeadline(assignment, subject).deadline,
         }
@@ -40,17 +61,26 @@ router.get('/assignments/:id/submission-context', auth, studentOnly, (req, res) 
   const assignment = assignmentAccess(req.params.id, req.user),
     subject = subjectFor(assignment, req.user)
   res.json({
-    ...subject,
-    effective_deadline: subject.not_assigned
-      ? null
-      : effectiveDeadline(assignment, subject).deadline,
-    members: subject.group
-      ? db
-          .prepare(
-            'SELECT student_id,name_snapshot name,username_snapshot username FROM assignment_group_members WHERE assignment_group_id=?',
-          )
-          .all(subject.group.id)
-      : [],
+    ...studentAssignmentContext(assignment, subject),
+  })
+})
+// New clients can refresh this additive preflight immediately before the confirmation dialog.
+// The actual submission transaction still records its own server-side deadline result.
+router.get('/assignments/:id/submission-policy', auth, studentOnly, (req, res) => {
+  const assignment = assignmentAccess(req.params.id, req.user),
+    subject = subjectFor(assignment, req.user),
+    serverNow = nowText(),
+    deadline = subject.not_assigned ? null : effectiveDeadline(assignment, subject).deadline
+  res.json({
+    server_now: serverNow,
+    effective_deadline: deadline,
+    is_late: Boolean(isLate(deadline, serverNow)),
+    can_submit: Boolean(
+      !subject.not_assigned &&
+      subject.can_submit &&
+      assignment.status === 'published' &&
+      assignment.course_status !== 'archived',
+    ),
   })
 })
 router.post(
@@ -58,10 +88,12 @@ router.post(
   auth,
   studentOnly,
   (req, res, next) => {
-    const assignment = assignmentAccess(req.params.id, req.user, { write: true })
+    const assignment = assignmentAccess(req.params.id, req.user, {
+      write: true,
+    })
     if (assignment.status !== 'published') fail(400, '作业已关闭')
     subjectFor(assignment, req.user, { submit: true })
-    req.uploadLimit = (assignment.max_file_mb ?? 200) * 1024 * 1024
+    req.uploadLimit = (assignment.max_file_mb ?? DEFAULT_ASSIGNMENT_FILE_MAX_MB) * 1024 * 1024
     req.allowedExtensions = assignment.allowed_extensions
       ? String(assignment.allowed_extensions).split(',')
       : null
@@ -70,7 +102,9 @@ router.post(
   uploadSubmissionFiles,
   async (req, res) => {
     try {
-      const assignment = assignmentAccess(req.params.id, req.user, { write: true })
+      const assignment = assignmentAccess(req.params.id, req.user, {
+        write: true,
+      })
       const result = await executeOperation(req, 'submission', assignment.id, () =>
         studentView(
           saveSubmission({
@@ -79,6 +113,7 @@ router.post(
             sourceFile: req.stagedSource,
             previewFiles: req.stagedPreviews,
             content: req.body.content,
+            answerQuestion: req.body.answer_question,
             baseVersion: req.body.base_version,
           }),
         ),

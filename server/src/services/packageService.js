@@ -3,17 +3,18 @@ import fs from 'node:fs'
 import { createHash } from 'node:crypto'
 import { db } from '../db.js'
 import { config } from '../config.js'
-import { safeName } from '../utils/fileFilter.js'
+import { cleanLegacyTimelinessSuffix, safeName } from '../utils/fileFilter.js'
 import { resolveUploadPath } from '../utils/uploadPath.js'
 import { pipeZipToResponse, writeZipFile } from '../utils/zipStream.js'
 import { fail } from './access.js'
 import { submissionAccess } from './submissionQueries.js'
+import { formatRequiredAnswerText } from '@university-homework/domain/requiredAnswers'
 
 function histories({ assignmentId, submissionId, group }) {
   if (group)
     return db
       .prepare(
-        `SELECT h.id history_id,h.group_submission_id submission_id,h.file_url,h.file_name,h.content,h.submitted_at,h.is_late,g.name,g.name username
+        `SELECT h.id history_id,h.group_submission_id submission_id,h.file_url,h.file_name,h.content,h.answer_question,h.submitted_at,h.is_late,g.name,g.name username
     FROM group_submission_history h JOIN group_submissions s ON s.id=h.group_submission_id
     JOIN assignment_groups g ON g.id=s.assignment_group_id
     WHERE ${submissionId ? 's.id=?' : 'g.assignment_id=?'} AND h.file_state IN ('available','online') ORDER BY g.id,h.id`,
@@ -21,7 +22,7 @@ function histories({ assignmentId, submissionId, group }) {
       .all(submissionId || assignmentId)
   return db
     .prepare(
-      `SELECT h.id history_id,h.submission_id,h.file_url,h.file_name,h.content,h.submitted_at,h.is_late,u.name,u.username
+      `SELECT h.id history_id,h.submission_id,h.file_url,h.file_name,h.content,h.answer_question,h.submitted_at,h.is_late,u.name,u.username
     FROM submission_history h JOIN submissions s ON s.id=h.submission_id JOIN users u ON u.id=s.student_id
     WHERE ${submissionId ? 's.id=?' : 's.assignment_id=?'} AND h.file_state IN ('available','online') ORDER BY u.username,h.id`,
     )
@@ -69,18 +70,23 @@ function archiveEntries(rows, group, withOwnerFolder) {
     const stamp = String(row.submitted_at || '')
       .replaceAll(':', '-')
       .replace(' ', '_')
-    const folder = `${owner}第${String(version).padStart(2, '0')}次_${stamp}_${row.is_late ? '迟交' : '准时'}/`
+    const folder = `${owner}第${String(version).padStart(2, '0')}次_${stamp}/`
     if (row.file_url) {
       const file = resolveUploadPath(row.file_url, { mustExist: true })
       if (file)
         entries.push({
-          name: unique(folder + '附件/' + safeName(row.file_name || path.basename(file))),
+          name: unique(
+            folder + '附件/' + cleanLegacyTimelinessSuffix(row.file_name || path.basename(file)),
+          ),
           path: file,
         })
       else missing.push(`${row.name} ${row.username}：${row.file_name || '附件'} 不存在`)
-    } else if (row.content) {
-      entries.push({ name: unique(folder + '在线作答.txt'), content: row.content })
     }
+    if (row.content)
+      entries.push({
+        name: unique(folder + (row.file_url ? '必答题目与作答.txt' : '在线作答.txt')),
+        content: formatRequiredAnswerText(row.answer_question, row.content),
+      })
     for (const image of images.get(row.history_id) || []) {
       const file = resolveUploadPath(image.file_url, { mustExist: true })
       const name = `${String(image.sort_order + 1).padStart(2, '0')}_${safeName(image.original_name)}`

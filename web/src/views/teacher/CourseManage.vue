@@ -37,8 +37,26 @@ const tabsRoot = ref(null),
     { label: '课程问答', name: 'questions' },
   ])
 useDraggableTabs(tabsRoot, tabDefs, 'teacher-course')
-const published = computed(
-  () => assignments.value.filter((assignment) => assignment.status === 'published').length,
+const closestDueAssignment = computed(() => {
+  const dueAssignments = assignments.value.filter(
+    (assignment) => assignment.status === 'published' && assignment.deadline,
+  )
+  if (!dueAssignments.length) return null
+  const now = dueAssignments[0].server_now || ''
+  const upcoming = dueAssignments.filter((assignment) => !now || assignment.deadline >= now)
+  const candidates = upcoming.length ? upcoming : dueAssignments
+  return candidates.reduce((closest, assignment) => {
+    const isCloser = upcoming.length
+      ? assignment.deadline < closest.deadline
+      : assignment.deadline > closest.deadline
+    return isCloser ? assignment : closest
+  })
+})
+const pendingReviewCount = computed(() =>
+  assignments.value.reduce(
+    (total, assignment) => total + Number(assignment.pending_review_count || 0),
+    0,
+  ),
 )
 let loadSequence = 0
 async function load() {
@@ -68,7 +86,7 @@ watch(
 )
 </script>
 <template>
-  <div>
+  <div class="teacher-course-manage">
     <div class="page-head">
       <div>
         <el-button text @click="router.push('/teacher/courses')">← 返回课程</el-button>
@@ -93,16 +111,34 @@ watch(
     </div>
     <div class="stat-strip">
       <div class="stat">
-        <b>{{ students.length }}</b
+        <b>{{ course.student_count ?? 0 }}</b
         ><span>课程学生</span>
       </div>
-      <div class="stat">
-        <b>{{ assignments.length }}</b
-        ><span>全部作业</span>
+      <div class="stat" :title="closestDueAssignment?.title || '暂无待截止作业'">
+        <b>
+          {{ closestDueAssignment ? closestDueAssignment.unsubmitted_count : '—' }}
+        </b>
+        <span>{{
+          closestDueAssignment
+            ? closestDueAssignment.work_mode === 'group'
+              ? '最近截止作业未交组数'
+              : '最近截止作业未交人数'
+            : '暂无待截止作业'
+        }}</span>
       </div>
-      <div class="stat">
-        <b>{{ published }}</b
-        ><span>进行中</span>
+      <div
+        class="stat pending-review-link"
+        role="link"
+        tabindex="0"
+        @click="
+          router.push({ path: '/teacher/reviews', query: { course_id: String(route.params.id) } })
+        "
+        @keydown.enter="
+          router.push({ path: '/teacher/reviews', query: { course_id: String(route.params.id) } })
+        "
+      >
+        <b>{{ pendingReviewCount }}</b
+        ><span>未批改</span>
       </div>
       <div class="stat">
         <b>{{ course.invite_code || '—' }}</b
@@ -132,7 +168,7 @@ watch(
         :readonly="course.status === 'archived'"
       />
     </div>
-    <div v-else-if="tab === 'materials'" class="panel">
+    <div v-else-if="tab === 'materials'" class="panel teacher-materials-panel">
       <CourseMaterials :course-id="route.params.id" :readonly="course.status === 'archived'" />
     </div>
     <div v-else-if="tab === 'groups'" class="panel">
@@ -158,3 +194,20 @@ watch(
     />
   </div>
 </template>
+
+<style scoped>
+.teacher-course-manage .teacher-materials-panel {
+  position: relative;
+  left: 50%;
+  width: min(1800px, calc(100vw - 32px));
+  max-width: none;
+  transform: translateX(-50%);
+}
+
+@media (max-width: 800px) {
+  .teacher-course-manage .teacher-materials-panel {
+    width: calc(100vw - 24px);
+    padding: 12px;
+  }
+}
+</style>

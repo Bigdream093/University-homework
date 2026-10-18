@@ -1,9 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
 import { db } from '../db.js'
 import { config } from '../config.js'
 import { nowText } from '../utils/time.js'
+import { storedFilename } from '../utils/storedFilename.js'
 import {
   keyAbsoluteForm,
   normalizeStorageKey,
@@ -43,7 +43,7 @@ export function queueCleanup(paths, reason = '文件已替换') {
 }
 
 /** 单条路径的精确引用检查：只做有索引的点查，供后台清理批处理使用。 */
-export function isFileReferenced(storedPath) {
+function isFileReferenced(storedPath) {
   const key = normalizeStorageKey(storedPath)
   if (!key) return false
   const absolute = keyAbsoluteForm(key)
@@ -198,10 +198,7 @@ export function promoteUpload(file, folder) {
   const directory = resolveUploadPath(path.join(config.uploadDir, folder))
   if (!directory) throw new Error('非法上传目录')
   fs.mkdirSync(directory, { recursive: true })
-  const destination = path.join(
-    directory,
-    randomUUID() + path.extname(file.originalname).toLowerCase(),
-  )
+  const destination = path.join(directory, storedFilename(file.originalname))
   fs.renameSync(file.path, destination)
   file.path = destination
   file.storageKey = toStorageKey(destination)
@@ -229,7 +226,7 @@ export function quarantineOrphans(minAgeMs = 24 * 60 * 60 * 1000) {
   const dest = path.join(root, '.quarantine')
   fs.mkdirSync(dest, { recursive: true })
   for (const source of candidates) {
-    const target = path.join(dest, randomUUID() + path.extname(source))
+    const target = path.join(dest, storedFilename(source))
     fs.renameSync(source, target)
     db.prepare(
       'INSERT INTO storage_quarantine(original_path,quarantine_path,quarantined_at) VALUES(?,?,?)',

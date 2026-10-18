@@ -10,6 +10,109 @@
   --gold: #dca84b;
   --line: #dfe7e2;
 }
+.upload-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 150px;
+  padding: 22px 20px;
+  border: 1.5px dashed #91ada6;
+  border-radius: 14px;
+  background: #f7fbf9;
+  color: var(--ink);
+  text-align: center;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    box-shadow 0.15s;
+}
+.upload-dropzone:hover,
+.upload-dropzone:focus-visible {
+  border-color: var(--green);
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(21, 85, 78, 0.1);
+}
+.upload-dropzone.dragging {
+  border: 2px solid var(--green);
+  background: #e8f3ef;
+  box-shadow: 0 0 0 4px rgba(21, 85, 78, 0.1);
+}
+.upload-dropzone.disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+.upload-dropzone__icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border-radius: 50%;
+  background: #e6f1ed;
+  color: var(--green);
+}
+.upload-dropzone__icon svg {
+  width: 22px;
+  height: 22px;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.upload-dropzone__main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-width: 0;
+}
+.upload-dropzone__details {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  min-width: 0;
+}
+.upload-dropzone__title {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+.upload-dropzone__selected {
+  color: #52706b;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.upload-dropzone__tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid #dbe8e2;
+  border-radius: 999px;
+  background: #fff;
+  color: #52706b;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.upload-dropzone__note {
+  flex: 0 1 100%;
+  max-width: 900px;
+  color: #647873;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
 .section-tabs .el-tabs__item {
   user-select: none;
   transition:
@@ -185,14 +288,35 @@ textarea {
   position: relative;
   overflow: hidden;
 }
-.course-card:before {
+.course-card::before {
   content: '';
   position: absolute;
-  left: 0;
-  top: 0;
-  width: 100%;
+  inset: 0 0 auto;
   height: 5px;
   background: linear-gradient(90deg, var(--green), #65a69c);
+}
+.teacher-course-card,
+.student-course-card {
+  padding: 26px;
+  font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif;
+}
+.course-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 36px;
+}
+.course-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.course-card-actions .el-button {
+  margin: 0;
+  padding: 7px 5px;
+  font-size: 13px;
+  font-weight: 400;
 }
 .course-card:hover {
   transform: translateY(-3px);
@@ -202,9 +326,24 @@ textarea {
   font-size: 20px;
   margin: 12px 0 8px;
 }
+.teacher-course-card h3,
+.student-course-card h3 {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.45;
+  letter-spacing: -0.02em;
+  margin: 20px 0 0;
+}
 .course-card p {
   color: #758783;
   min-height: 42px;
+}
+.teacher-course-card p,
+.student-course-card p {
+  margin: 10px 0 0;
+  color: #758783;
+  font-size: 14px;
+  line-height: 1.6;
 }
 .meta-row {
   display: flex;
@@ -212,6 +351,37 @@ textarea {
   color: #71817e;
   font-size: 13px;
   margin-top: 18px;
+}
+.student-course-meta {
+  margin-top: 32px;
+}
+.course-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 32px;
+}
+.course-summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  color: #71817e;
+  font-size: 13px;
+}
+.course-summary-item b,
+.course-summary-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.course-summary-item b {
+  color: #28574f;
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  line-height: 1.25;
 }
 .badge {
   display: inline-flex;
@@ -221,6 +391,20 @@ textarea {
   color: var(--green);
   font-size: 12px;
   font-weight: 600;
+}
+.teacher-course-card .badge {
+  padding: 6px 11px;
+  background: #f1f6f4;
+  color: #526c66;
+  font-size: 14px;
+  font-weight: 700;
+}
+.student-course-card > .badge:first-child {
+  padding: 6px 11px;
+  background: #f1f6f4;
+  color: #526c66;
+  font-size: 14px;
+  font-weight: 700;
 }
 .empty {
   text-align: center;
@@ -233,13 +417,6 @@ textarea {
   align-items: center;
   flex-wrap: wrap;
   margin-bottom: 18px;
-}
-.status-dot {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  margin-right: 6px;
 }
 .late {
   color: #bb5a40;
@@ -466,4 +643,75 @@ textarea {
 }
 .markdown-dialog > .el-dialog__footer {
   flex-shrink: 0;
+}
+
+/* Shared compact card rhythm for teacher and student lists. */
+.collapsible-card {
+  border-radius: 12px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.collapsible-card .card-head {
+  min-height: 66px;
+  padding: 14px 16px;
+  gap: 10px;
+  background: #fff;
+}
+.collapsible-card .card-head:hover {
+  background: #f7faf8;
+}
+.collapsible-card .card-title {
+  font-size: 18px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.collapsible-card .card-head .badge {
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.collapsible-card .card-meta {
+  flex: none;
+  color: #7b8e85;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.collapsible-card .card-chevron {
+  font-size: 12px;
+  color: #7b8e85;
+}
+.collapsible-card .card-body {
+  padding: 16px 18px;
+  border-top: 1px solid #e9efeb;
+}
+.badge.submission-state-returned {
+  background: #fff2df;
+  color: #a16823;
+}
+.badge.submission-state-submitted {
+  background: #eef4fb;
+  color: #4c769b;
+}
+.badge.submission-state-graded {
+  background: #e8f4ed;
+  color: #347455;
+}
+.badge.submission-state-unsubmitted {
+  background: #f0f3f1;
+  color: #72837b;
+}
+@media (max-width: 700px) {
+  .collapsible-card .card-head {
+    gap: 8px;
+    padding: 12px;
+  }
+  .collapsible-card .card-title {
+    flex-basis: calc(100% - 120px);
+    min-width: 140px;
+    font-size: 17px;
+  }
+  .collapsible-card .card-meta {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
 }

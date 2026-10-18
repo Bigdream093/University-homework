@@ -1,14 +1,11 @@
-import { computeScores } from '../domain/gradeScores.js'
-export { computeScores } from '../domain/gradeScores.js'
+import { computeScores, dailyWeightSum } from '@university-homework/domain/gradeScores'
 import { db } from '../db.js'
 import { fail, idValue } from './access.js'
+import { assignmentGroupMembersForAssignments } from './assignmentGroupMembers.js'
+import { round1 } from '@university-homework/domain/numbers'
+import { placeholders } from '../utils/sql.js'
 
-function placeholders(values) {
-  return values.map(() => '?').join(',')
-}
-const round1 = (value) => Math.round(value * 10) / 10
-
-export function gradeConfigOf(course) {
+function gradeConfigOf(course) {
   return {
     daily_ratio: Number(course.daily_ratio ?? 40),
     final_ratio: Number(course.final_ratio ?? 60),
@@ -30,7 +27,7 @@ function cellFromSubmission(row, kind, previewRows, members, groupName) {
     submitted_at: row.submitted_at,
     file_name: row.file_name,
     file_size: row.file_size,
-    has_content: Boolean(row.content),
+    has_content: Boolean(row.has_content ?? row.content),
     previews: previewRows.map((preview) => ({
       id: preview.id,
       name: preview.original_name,
@@ -43,7 +40,7 @@ function cellFromSubmission(row, kind, previewRows, members, groupName) {
   }
 }
 
-export function courseSummary(course) {
+export function courseSummary(course, { includePreviews = true } = {}) {
   const config = gradeConfigOf(course)
   const assignments = db
     .prepare(
@@ -62,15 +59,13 @@ export function courseSummary(course) {
     .all(course.id)
   const cellsByStudent = new Map(students.map((student) => [student.id, {}]))
 
-  // 个人提交。
   const individual = db
     .prepare(
-      'SELECT s.* FROM submissions s JOIN assignments a ON a.id=s.assignment_id WHERE a.course_id=?',
+      "SELECT s.id,s.assignment_id,s.student_id,s.status,s.score,s.comment,s.returned_reason,s.is_late,s.submit_count,s.submitted_at,s.file_name,s.file_size,CASE WHEN s.content IS NOT NULL AND s.content<>'' THEN 1 ELSE 0 END has_content FROM submissions s JOIN assignments a ON a.id=s.assignment_id WHERE a.course_id=?",
     )
     .all(course.id)
   const submissionIds = individual.map((submission) => submission.id)
 
-  // 分组提交：组 → 提交，成员快照展开到每个学生；未安排的学生显式标记。
   const groupAssignmentIds = assignments
     .filter((assignment) => assignment.work_mode === 'group')
     .map((assignment) => assignment.id)
@@ -87,71 +82,66 @@ export function courseSummary(course) {
       groupById.set(group.id, group)
       membersByGroup.set(group.id, [])
     }
-    for (const member of db
-      .prepare(
-        `SELECT assignment_group_id,student_id,username_snapshot username,name_snapshot name FROM assignment_group_members WHERE assignment_id IN (${groupPlaceholders}) ORDER BY student_id`,
-      )
-      .all(...groupAssignmentIds)) {
+    for (const member of assignmentGroupMembersForAssignments(groupAssignmentIds)) {
       membersByGroup
         .get(member.assignment_group_id)
         ?.push({ username: member.username, name: member.name, student_id: member.student_id })
     }
     for (const submission of db
       .prepare(
-        `SELECT gs.* FROM group_submissions gs JOIN assignment_groups g ON g.id=gs.assignment_group_id WHERE g.assignment_id IN (${groupPlaceholders})`,
+        `SELECT gs.id,gs.assignment_group_id,gs.status,gs.score,gs.comment,gs.returned_reason,gs.is_late,gs.submit_count,gs.submitted_at,gs.file_name,gs.file_size,CASE WHEN gs.content IS NOT NULL AND gs.content<>'' THEN 1 ELSE 0 END has_content FROM group_submissions gs JOIN assignment_groups g ON g.id=gs.assignment_group_id WHERE g.assignment_id IN (${groupPlaceholders})`,
       )
       .all(...groupAssignmentIds)) {
       groupSubByGroup.set(submission.assignment_group_id, submission)
     }
   }
 
-  // 预览图：每个提交只挂最新一次历史的图片组（与列表页逻辑一致），批量查询避免 N+1。
-  // 注意：查历史必须用提交记录自身的 id（group_submissions.id），
-  // 组编号（assignment_group_id）与提交编号在数据增长后不保证一致。
   const previewsByHistory = new Map(),
     historyIdBySubmission = new Map(),
     historyIdByGroupSubmission = new Map()
-  const historyIdsByColumn = new Map([
-    ['submission_history_id', []],
-    ['group_submission_history_id', []],
-  ])
-  if (submissionIds.length) {
-    for (const history of db
-      .prepare(
-        `SELECT submission_id owner_id,MAX(id) hid FROM submission_history WHERE submission_id IN (${placeholders(submissionIds)}) GROUP BY submission_id`,
-      )
-      .all(...submissionIds)) {
-      historyIdBySubmission.set(history.owner_id, history.hid)
-      historyIdsByColumn.get('submission_history_id').push(history.hid)
-    }
-  }
-  const groupSubmissionIds = [...groupSubByGroup.values()].map((submission) => submission.id)
-  if (groupSubmissionIds.length) {
-    for (const history of db
-      .prepare(
-        `SELECT group_submission_id owner_id,MAX(id) hid FROM group_submission_history WHERE group_submission_id IN (${placeholders(groupSubmissionIds)}) GROUP BY group_submission_id`,
-      )
-      .all(...groupSubmissionIds)) {
-      historyIdByGroupSubmission.set(history.owner_id, history.hid)
-      historyIdsByColumn.get('group_submission_history_id').push(history.hid)
-    }
-  }
-  for (const [column, historyIds] of historyIdsByColumn) {
-    if (!historyIds.length) continue
-    for (const preview of db
-      .prepare(
-        `SELECT ${column} history_id,id,original_name,file_size,sort_order FROM submission_preview_images WHERE ${column} IN (${placeholders(historyIds)}) AND file_state='available' ORDER BY sort_order,id`,
-      )
-      .all(...historyIds)) {
-      const item = {
-        id: preview.id,
-        original_name: preview.original_name,
-        file_size: preview.file_size,
-        sort_order: preview.sort_order,
+  if (includePreviews) {
+    const historyIdsByColumn = new Map([
+      ['submission_history_id', []],
+      ['group_submission_history_id', []],
+    ])
+    if (submissionIds.length) {
+      for (const history of db
+        .prepare(
+          `SELECT submission_id owner_id,MAX(id) hid FROM submission_history WHERE submission_id IN (${placeholders(submissionIds)}) GROUP BY submission_id`,
+        )
+        .all(...submissionIds)) {
+        historyIdBySubmission.set(history.owner_id, history.hid)
+        historyIdsByColumn.get('submission_history_id').push(history.hid)
       }
-      const rows = previewsByHistory.get(preview.history_id)
-      if (rows) rows.push(item)
-      else previewsByHistory.set(preview.history_id, [item])
+    }
+    const groupSubmissionIds = [...groupSubByGroup.values()].map((submission) => submission.id)
+    if (groupSubmissionIds.length) {
+      for (const history of db
+        .prepare(
+          `SELECT group_submission_id owner_id,MAX(id) hid FROM group_submission_history WHERE group_submission_id IN (${placeholders(groupSubmissionIds)}) GROUP BY group_submission_id`,
+        )
+        .all(...groupSubmissionIds)) {
+        historyIdByGroupSubmission.set(history.owner_id, history.hid)
+        historyIdsByColumn.get('group_submission_history_id').push(history.hid)
+      }
+    }
+    for (const [column, historyIds] of historyIdsByColumn) {
+      if (!historyIds.length) continue
+      for (const preview of db
+        .prepare(
+          `SELECT ${column} history_id,id,original_name,file_size,sort_order FROM submission_preview_images WHERE ${column} IN (${placeholders(historyIds)}) AND file_state='available' ORDER BY sort_order,id`,
+        )
+        .all(...historyIds)) {
+        const item = {
+          id: preview.id,
+          original_name: preview.original_name,
+          file_size: preview.file_size,
+          sort_order: preview.sort_order,
+        }
+        const rows = previewsByHistory.get(preview.history_id)
+        if (rows) rows.push(item)
+        else previewsByHistory.set(preview.history_id, [item])
+      }
     }
   }
 
@@ -169,16 +159,12 @@ export function courseSummary(course) {
       members = membersByGroup.get(row.assignment_group_id) || []
     if (!group) continue
     const previews = previewsByHistory.get(historyIdByGroupSubmission.get(row.id)) || []
+    const memberViews = members.map(({ username, name }) => ({ username, name }))
+    const cell = cellFromSubmission(row, 'group', previews, memberViews, group.name)
     for (const member of members) {
       const cells = cellsByStudent.get(member.student_id)
       if (!cells) continue
-      cells[group.assignment_id] = cellFromSubmission(
-        row,
-        'group',
-        previews,
-        members.map(({ username, name }) => ({ username, name })),
-        group.name,
-      )
+      cells[group.assignment_id] = { ...cell }
     }
   }
 
@@ -189,6 +175,31 @@ export function courseSummary(course) {
       const cells = cellsByStudent.get(student.id)
       if (cells && !cells[assignment.id])
         cells[assignment.id] = { not_assigned: true, status: 'not_assigned' }
+    }
+  }
+
+  const absenceMarks = db
+    .prepare(
+      `SELECT assignment_id,student_id,assignment_group_id,graded_at FROM absence_grade_marks
+       WHERE assignment_id IN (${placeholders(assignments.map((assignment) => assignment.id)) || 'NULL'})`,
+    )
+    .all(...assignments.map((assignment) => assignment.id))
+  for (const mark of absenceMarks) {
+    const cell = {
+      absence_graded: true,
+      status: 'graded',
+      score: 0,
+      comment: '未交记 0 分',
+      graded_at: mark.graded_at,
+    }
+    if (mark.student_id) {
+      const cells = cellsByStudent.get(mark.student_id)
+      if (cells && !cells[mark.assignment_id]) cells[mark.assignment_id] = cell
+      continue
+    }
+    for (const member of membersByGroup.get(mark.assignment_group_id) || []) {
+      const cells = cellsByStudent.get(member.student_id)
+      if (cells && !cells[mark.assignment_id]) cells[mark.assignment_id] = { ...cell }
     }
   }
 
@@ -235,27 +246,15 @@ export function saveGradeConfig(course, body) {
     if (!Number.isFinite(weight) || weight < 0 || weight > 100)
       fail(400, '占比必须是 0-100 之间的数字')
   }
-  // 平时各项之和只统计已发布、非期末的作业（草稿与期末作业不参与）；
+  // 平时各项之和按本次选中的期末作业排除（草稿与期末作业不参与）；
   // 本次未提交权重的作业沿用库中现值。
   const counted = db
-    .prepare(
-      "SELECT id,grade_weight FROM assignments WHERE course_id=? AND is_final=0 AND status<>'draft'",
-    )
+    .prepare('SELECT id,grade_weight,status FROM assignments WHERE course_id=?')
     .all(course.id)
-  const weightOf = new Map(
+  const weightOf = Object.fromEntries(
     weights.map((item) => [String(idValue(item.assignment_id)), Number(item.grade_weight) || 0]),
   )
-  const weightSum = round1(
-    counted.reduce(
-      (total, assignment) =>
-        total +
-        Math.max(
-          0,
-          Number(weightOf.get(String(assignment.id)) ?? assignment.grade_weight) || 0,
-        ),
-      0,
-    ),
-  )
+  const weightSum = dailyWeightSum(counted, finalAssignmentId, weightOf)
   if (weightSum !== round1(daily))
     fail(400, `平时各项占比之和（${weightSum}%）必须等于平时占比（${round1(daily)}%）`)
   db.transaction(() => {

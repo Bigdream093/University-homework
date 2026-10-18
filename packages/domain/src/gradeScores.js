@@ -1,4 +1,16 @@
-const round1 = (value) => Math.round(value * 10) / 10
+import { round1 } from './numbers.js'
+
+// 按本次设置选中的期末作业计算，不能沿用保存前的 is_final 标记。
+export function dailyWeightSum(assignments, finalAssignmentId, weights = {}) {
+  let sum = 0
+  for (const assignment of assignments) {
+    if (Number(assignment.id) === Number(finalAssignmentId) || assignment.status === 'draft')
+      continue
+    const weight = Number(weights[assignment.id] ?? assignment.grade_weight ?? 0)
+    if (Number.isFinite(weight) && weight > 0) sum += weight
+  }
+  return round1(sum)
+}
 
 // 折算百分制；满分无效或成绩缺失返回 null（该作业整体跳过，避免除零）。
 function normalize(score, totalScore) {

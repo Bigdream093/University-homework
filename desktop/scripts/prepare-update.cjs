@@ -11,8 +11,12 @@ async function fileHash(file) {
 }
 
 async function prepareUpdate(role, platform, desktop = path.resolve(__dirname, '..')) {
-  if (!['teacher', 'student'].includes(role) || !['win32', 'darwin'].includes(platform) ||
-      (platform === 'darwin' && role !== 'student')) throw new Error('不支持的角色或平台')
+  if (
+    !['teacher', 'student'].includes(role) ||
+    !['win32', 'darwin'].includes(platform) ||
+    (platform === 'darwin' && role !== 'student')
+  )
+    throw new Error('不支持的角色或平台')
   const { version } = JSON.parse(fs.readFileSync(path.join(desktop, 'package.json'), 'utf8'))
   const source = path.join(desktop, 'release', role)
   const files = []
@@ -29,7 +33,7 @@ async function prepareUpdate(role, platform, desktop = path.resolve(__dirname, '
       const file = decodeURIComponent(entry.url)
       if (file !== `${prefix}${version}.exe`) throw new Error('安装包角色、版本或路径不匹配')
       const full = path.join(source, file)
-      if (fs.statSync(full).size !== entry.size || await fileHash(full) !== entry.sha512) {
+      if (fs.statSync(full).size !== entry.size || (await fileHash(full)) !== entry.sha512) {
         throw new Error(`安装包大小或哈希不匹配：${file}`)
       }
       if (!fs.existsSync(`${full}.blockmap`)) throw new Error(`缺少 blockmap：${file}`)
@@ -57,8 +61,13 @@ async function prepareUpdate(role, platform, desktop = path.resolve(__dirname, '
 }
 
 if (require.main === module) {
-  prepareUpdate(process.argv[2], process.argv[3]).then((output) => {
-    console.log(`更新文件已整理：${output}\n请先上传安装文件，最后原子替换版本清单。`)
-  }).catch((error) => { console.error(error.message); process.exitCode = 1 })
+  prepareUpdate(process.argv[2], process.argv[3])
+    .then((output) => {
+      console.log(`更新文件已整理：${output}\n请先上传安装文件，最后原子替换版本清单。`)
+    })
+    .catch((error) => {
+      console.error(error.message)
+      process.exitCode = 1
+    })
 }
 module.exports = { prepareUpdate }

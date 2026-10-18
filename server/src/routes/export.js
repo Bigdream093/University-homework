@@ -9,11 +9,11 @@ const router = Router()
 router.get('/assignments/:id/export', auth, teacherOnly, async (req, res) => {
   const assignment = db
     .prepare(
-      `SELECT a.* FROM assignments a JOIN courses c ON c.id=a.course_id WHERE a.id=? AND c.teacher_id=?`,
+      'SELECT a.* FROM assignments a JOIN courses c ON c.id=a.course_id WHERE a.id=? AND c.teacher_id=?',
     )
     .get(req.params.id, req.user.id)
   if (!assignment) return res.status(404).json({ message: '作业不存在' })
-  const rows = teacherRows(assignment).flatMap((row) =>
+  const rows = teacherRows(assignment, { includeDetails: false }).flatMap((row) =>
     assignment.work_mode === 'group'
       ? row.members.map((member) => ({
           ...row,

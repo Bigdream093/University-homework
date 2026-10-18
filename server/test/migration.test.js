@@ -38,9 +38,11 @@ test('legacy database migration preserves rows, timestamps and files; second boo
   legacy.exec(
     "INSERT INTO submission_history(id,submission_id,file_url,file_name,submitted_at) VALUES(101,100,NULL,'已丢失引用.txt','2020-01-01 12:00:00')",
   )
+  legacy.exec(`CREATE TABLE materials (id INTEGER PRIMARY KEY AUTOINCREMENT,course_id INTEGER NOT NULL REFERENCES courses(id),teacher_id INTEGER NOT NULL REFERENCES users(id),title TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',file_url TEXT,file_name TEXT,file_size INTEGER,file_type TEXT,created_at TEXT NOT NULL DEFAULT '2020-01-01 12:00:00');
+    INSERT INTO materials(id,course_id,teacher_id,title) VALUES(101,100,100,'旧资料一'),(102,100,100,'旧资料二');`)
   legacy.close()
   const code =
-    "const {db}=await import('./src/db.js');console.log(JSON.stringify({course:db.prepare('SELECT id,created_at,status FROM courses WHERE id=100').get(),a:db.prepare('SELECT work_mode,max_file_mb FROM assignments WHERE id=100').get(),history:db.prepare('SELECT id,file_url,file_state,submitted_at FROM submission_history ORDER BY id').all(),migration:db.prepare('SELECT * FROM schema_migrations').all(),foreign:db.pragma('foreign_key_check')}));db.close();"
+    "const {db}=await import('./src/db.js');console.log(JSON.stringify({course:db.prepare('SELECT id,created_at,status FROM courses WHERE id=100').get(),a:db.prepare('SELECT work_mode,max_file_mb FROM assignments WHERE id=100').get(),submission:db.prepare('SELECT submit_count,resubmit_count FROM submissions WHERE id=100').get(),history:db.prepare('SELECT id,file_url,file_state,submitted_at FROM submission_history ORDER BY id').all(),migration:db.prepare('SELECT * FROM schema_migrations').all(),materials:db.prepare('SELECT id,created_at FROM materials ORDER BY sort_order,id').all(),foreign:db.pragma('foreign_key_check')}));db.close();"
   const run = () =>
     JSON.parse(
       execFileSync(process.execPath, ['--input-type=module', '-e', code], {
@@ -57,8 +59,14 @@ test('legacy database migration preserves rows, timestamps and files; second boo
     assert.equal(first.course.status, 'active')
     assert.equal(first.a.work_mode, 'individual')
     assert.equal(first.a.max_file_mb, 200)
+    assert.deepEqual(first.submission, { submit_count: 2, resubmit_count: 1 })
     assert.equal(first.history.length, 2)
     assert.equal(first.history[1].file_state, 'legacy_unknown')
+    assert.deepEqual(
+      first.materials.map((row) => row.id),
+      [102, 101],
+    )
+    assert.ok(first.materials.every((row) => row.created_at === '2020-01-01 12:00:00'))
     assert.deepEqual(first.foreign, [])
     assert.equal(fs.readFileSync(attachment, 'utf8'), 'historic submission')
   } finally {

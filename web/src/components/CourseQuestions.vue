@@ -2,19 +2,23 @@
 import RichTextEditor from './RichTextEditor.vue'
 import RichTextContent from './RichTextContent.vue'
 import { contentSummary, editableRichText } from '../utils/richText.js'
-import { computed, ref } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useUserStore } from '../stores/user.js'
 import { useRefresh } from '../composables/useRefresh.js'
+import { useAsyncList } from '../composables/useAsyncList.js'
 import { useCollapse } from '../composables/useCollapse.js'
 import api, { messageOf } from '../api/request.js'
+import { readUser } from '../utils/session.js'
 const props = defineProps({ courseId: [String, Number], readonly: Boolean })
-const teacher = computed(() => useUserStore().user?.role === 'teacher'),
+const isDialogDismissal = (error) =>
+  ['cancel', 'close'].includes(error) || ['cancel', 'close'].includes(error?.message)
+const userStore = useUserStore()
+const teacher = computed(() => userStore.user?.role === 'teacher'),
   tab = ref('private'),
   keyword = ref(''),
   filter = ref(''),
   page = ref(1),
-  rows = ref([]),
   detail = ref(null),
   dialog = ref(false),
   compose = ref(false),
@@ -33,6 +37,27 @@ const anyImageBusy = computed(
   () => composeBusy.value || replyBusy.value || summaryBusy.value || publicReplyBusy.value,
 )
 const publicCard = useCollapse()
+const {
+  data: rows,
+  loading,
+  loaded,
+  loadError,
+  load,
+} = useAsyncList(
+  async (signal) =>
+    (
+      await api.get(
+        '/courses/' + props.courseId + '/questions' + (tab.value === 'public' ? '/public' : ''),
+        {
+          params: { keyword: keyword.value, status: filter.value, page: page.value, limit: 20 },
+          signal,
+        },
+      )
+    ).data,
+)
+const savingQuestion = ref(false)
+const sendingReply = ref(false)
+const replyDraftId = ref('')
 const hasPublished = computed(
   () => !!detail.value?.publications.some((publication) => publication.status === 'published'),
 )
@@ -40,27 +65,32 @@ const hasPublished = computed(
 const pubDeleted = computed(
   () => !!detail.value?.visibility_events.some((event) => event.event === 'delete_publication'),
 )
-let loadSequence = 0
-async function load() {
-  const sequence = ++loadSequence,
-    courseId = props.courseId,
-    view = tab.value,
-    params = { keyword: keyword.value, status: filter.value, page: page.value, limit: 20 }
+let composeDraftTimer,
+  replyDraftTimer,
+  skipComposeCloseDraft = false
+function draftKey(kind, id = 'new') {
+  return `course-question-draft:${readUser()?.id || 'guest'}:${props.courseId}:${kind}:${id}`
+}
+function readDraft(kind, id) {
   try {
-    const data = (
-      await api.get('/courses/' + courseId + '/questions' + (view === 'public' ? '/public' : ''), {
-        params,
-      })
-    ).data
-    if (sequence === loadSequence) rows.value = data
-  } catch (error) {
-    if (sequence === loadSequence) ElMessage.error(messageOf(error))
+    return JSON.parse(sessionStorage.getItem(draftKey(kind, id)) || 'null')
+  } catch {
+    return null
   }
+}
+function saveDraft(kind, id, value) {
+  try {
+    const key = draftKey(kind, id)
+    if (value && Object.values(value).some((item) => String(item || '').trim()))
+      sessionStorage.setItem(key, JSON.stringify(value))
+    else sessionStorage.removeItem(key)
+  } catch {}
 }
 async function open(row) {
   try {
     detail.value = (await api.get('/questions/' + row.id)).data
-    reply.value = ''
+    replyDraftId.value = String(row.id)
+    reply.value = teacher.value ? '' : readDraft('reply', replyDraftId.value)?.content || ''
     dialog.value = true
   } catch (error) {
     ElMessage.error(messageOf(error))
@@ -71,21 +101,71 @@ function openFromPublic(row) {
 }
 function newQuestion(row = null) {
   editId.value = row?.id || null
-  title.value = row?.title || ''
-  content.value = editableRichText(row?.content, row?.content_format)
+  const saved = readDraft('compose', editId.value || 'new')
+  title.value = saved?.title ?? row?.title ?? ''
+  content.value = saved?.content ?? editableRichText(row?.content, row?.content_format)
   compose.value = true
 }
+watch([title, content], () => {
+  if (!compose.value || teacher.value) return
+  clearTimeout(composeDraftTimer)
+  const id = editId.value || 'new',
+    value = { title: title.value, content: content.value }
+  composeDraftTimer = window.setTimeout(() => saveDraft('compose', id, value), 350)
+})
+watch(
+  compose,
+  (opened) => {
+    if (opened || teacher.value) return
+    clearTimeout(composeDraftTimer)
+    if (skipComposeCloseDraft) {
+      skipComposeCloseDraft = false
+      return
+    }
+    saveDraft('compose', editId.value || 'new', { title: title.value, content: content.value })
+  },
+  { flush: 'sync' },
+)
+watch(reply, () => {
+  if (!dialog.value || teacher.value || !replyDraftId.value) return
+  clearTimeout(replyDraftTimer)
+  const id = replyDraftId.value,
+    value = { content: reply.value }
+  replyDraftTimer = window.setTimeout(() => saveDraft('reply', id, value), 350)
+})
+watch(
+  dialog,
+  (opened) => {
+    if (opened || teacher.value || !replyDraftId.value) return
+    clearTimeout(replyDraftTimer)
+    saveDraft('reply', replyDraftId.value, { content: reply.value })
+  },
+  { flush: 'sync' },
+)
 async function save() {
+  if (savingQuestion.value) return
   if (composeBusy.value) return ElMessage.warning('请先完成图片上传')
+  savingQuestion.value = true
+  const savedId = editId.value
   try {
     const body = { title: title.value, content: content.value, content_format: 'html' }
     if (editId.value) await api.put('/questions/' + editId.value, body)
     else await api.post('/courses/' + props.courseId + '/questions', body)
+    clearTimeout(composeDraftTimer)
+    const changedWhileSaving = title.value !== body.title || content.value !== body.content
+    saveDraft(
+      'compose',
+      savedId || 'new',
+      changedWhileSaving ? { title: title.value, content: content.value } : null,
+    )
+    skipComposeCloseDraft = true
     compose.value = false
     await load()
     if (detail.value && editId.value) await open(detail.value)
   } catch (error) {
     ElMessage.error(messageOf(error))
+  } finally {
+    savingQuestion.value = false
   }
 }
 async function action(url, body = {}, method = 'post') {
@@ -111,8 +191,36 @@ async function publicAction(row, suffix, message) {
   }
 }
 async function sendReply() {
+  if (sendingReply.value) return
   if (replyBusy.value) return ElMessage.warning('请先完成图片上传')
-  if (await action('/replies', { content: reply.value, content_format: 'html' })) reply.value = ''
+  sendingReply.value = true
+  const questionId = detail.value.id,
+    sentContent = reply.value
+  try {
+    await api.post(`/questions/${questionId}/replies`, {
+      content: sentContent,
+      content_format: 'html',
+    })
+    const editedAfterSend = reply.value !== sentContent
+    clearTimeout(replyDraftTimer)
+    if (editedAfterSend) saveDraft('reply', replyDraftId.value, { content: reply.value })
+    else {
+      reply.value = ''
+      saveDraft('reply', replyDraftId.value, null)
+    }
+    try {
+      detail.value = (await api.get(`/questions/${questionId}`)).data
+      await load()
+    } catch {
+      ElMessage.warning('回复已发送，但页面刷新失败；可稍后重新打开查看。')
+      return
+    }
+    ElMessage.success('回复已发送')
+  } catch (error) {
+    ElMessage.error(messageOf(error))
+  } finally {
+    sendingReply.value = false
+  }
 }
 async function remove() {
   try {
@@ -121,7 +229,7 @@ async function remove() {
     dialog.value = false
     await load()
   } catch (error) {
-    if (error !== 'cancel') ElMessage.error(messageOf(error))
+    if (!isDialogDismissal(error)) ElMessage.error(messageOf(error))
   }
 }
 async function removePublication(publicationRecord) {
@@ -136,7 +244,7 @@ async function removePublication(publicationRecord) {
     await load()
     ElMessage.success('公开摘要已删除')
   } catch (error) {
-    if (error !== 'cancel') ElMessage.error(messageOf(error))
+    if (!isDialogDismissal(error)) ElMessage.error(messageOf(error))
   }
 }
 async function removePublicationRow(row) {
@@ -151,7 +259,7 @@ async function removePublicationRow(row) {
     await load()
     ElMessage.success('公开问答已删除')
   } catch (error) {
-    if (error !== 'cancel') ElMessage.error(messageOf(error))
+    if (!isDialogDismissal(error)) ElMessage.error(messageOf(error))
   }
 }
 async function movePublication(row, direction) {
@@ -196,23 +304,48 @@ function goToNextPage() {
   load()
 }
 useRefresh(load)
+onUnmounted(() => {
+  if (compose.value && !teacher.value)
+    saveDraft('compose', editId.value || 'new', { title: title.value, content: content.value })
+  if (dialog.value && !teacher.value && replyDraftId.value)
+    saveDraft('reply', replyDraftId.value, { content: reply.value })
+  clearTimeout(composeDraftTimer)
+  clearTimeout(replyDraftTimer)
+})
 </script>
 <template>
   <section>
-    <div class="toolbar">
+    <div class="toolbar questions-toolbar">
       <el-radio-group v-model="tab" @change="switchTab"
         ><el-radio-button value="private">{{
           teacher ? '学生提问管理' : '我的提问'
         }}</el-radio-button
         ><el-radio-button value="public">全班公开问答</el-radio-button></el-radio-group
-      ><el-button v-if="!teacher && !readonly" @click="newQuestion()">提问</el-button
-      ><router-link :to="{ path: '/help', hash: teacher ? '#teacher-notice' : '#student-notice' }"
-        >隐私说明</router-link
       >
+      <div class="questions-toolbar-actions">
+        <el-button v-if="!teacher && !readonly" @click="newQuestion()">提问</el-button>
+        <router-link
+          :to="{ path: '/help', hash: teacher ? '#teacher-qa' : '#student-qa' }"
+          custom
+          v-slot="{ navigate }"
+        >
+          <el-button size="small" @click="navigate">隐私说明</el-button>
+        </router-link>
+      </div>
     </div>
     <p class="hint">
       原始问题、追问和师生回复仅提问人和教师可见；教师可另写匿名摘要和答复发布到全班公开区。
     </p>
+    <el-alert
+      v-if="loadError"
+      :title="loadError"
+      type="error"
+      show-icon
+      :closable="false"
+      style="margin-bottom: 14px"
+      ><el-button size="small" @click="load">重试</el-button></el-alert
+    >
+    <div v-if="loading && !loaded" class="hint">正在加载问答…</div>
     <div class="toolbar">
       <el-input
         v-model="keyword"
@@ -292,7 +425,7 @@ useRefresh(load)
         </p>
       </article>
     </template>
-    <p v-if="!rows.length" class="hint">暂无相关问答。</p>
+    <p v-if="loaded && !loading && !rows.length" class="hint">暂无相关问答。</p>
     <div class="toolbar">
       <el-button :disabled="page === 1" @click="goToPrevPage">上一页</el-button>
       <span>第{{ page }}页</span>
@@ -306,8 +439,8 @@ useRefresh(load)
       class="markdown-dialog"
       destroy-on-close
       :close-on-click-modal="false"
-      :close-on-press-escape="!anyImageBusy"
-      :show-close="!anyImageBusy"
+      :close-on-press-escape="!composeBusy && !savingQuestion"
+      :show-close="!composeBusy && !savingQuestion"
       ><el-input v-model="title" placeholder="标题" maxlength="200" /><RichTextEditor
         v-if="compose"
         v-model="content"
@@ -317,7 +450,13 @@ useRefresh(load)
       />
       <p class="hint">原始内容不会直接公开；教师可以另行整理匿名摘要和答复。</p>
       <template #footer
-        ><el-button type="primary" :disabled="composeBusy" @click="save">保存</el-button></template
+        ><el-button
+          type="primary"
+          :loading="savingQuestion"
+          :disabled="composeBusy || savingQuestion"
+          @click="save"
+          >保存</el-button
+        ></template
       ></el-dialog
     >
     <el-dialog
@@ -328,16 +467,18 @@ useRefresh(load)
       class="markdown-dialog"
       destroy-on-close
       :close-on-click-modal="false"
-      :close-on-press-escape="!anyImageBusy"
-      :show-close="!anyImageBusy"
+      :close-on-press-escape="!anyImageBusy && !sendingReply"
+      :show-close="!anyImageBusy && !sendingReply"
       ><template v-if="detail"
         ><RichTextContent :content="detail.content" :format="detail.content_format" />
         <p class="hint">原题与对话仅提问人和教师可见；公开区只展示教师另写的匿名摘要。</p>
         <div class="toolbar">
           <template v-if="!teacher"
             ><template v-if="!readonly && !detail.replies.length && !detail.publications.length"
-              ><el-button @click="newQuestion(detail)">编辑</el-button
-              ><el-button type="danger" @click="remove">删除</el-button></template
+              ><el-button :disabled="sendingReply" @click="newQuestion(detail)">编辑</el-button
+              ><el-button type="danger" :disabled="sendingReply" @click="remove"
+                >删除</el-button
+              ></template
             ></template
           ><template v-else
             ><el-button v-if="!readonly" @click="action('/manage', { status: 'resolved' }, 'put')"
@@ -375,7 +516,8 @@ useRefresh(load)
           /><el-button
             type="primary"
             style="margin-top: 12px"
-            :disabled="replyBusy"
+            :loading="sendingReply"
+            :disabled="replyBusy || sendingReply"
             @click="sendReply"
             >发送私人回复</el-button
           ></template
@@ -445,3 +587,19 @@ useRefresh(load)
     >
   </section>
 </template>
+
+<style scoped>
+.questions-toolbar {
+  justify-content: space-between;
+}
+.questions-toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+.questions-toolbar-actions :deep(.el-button) {
+  margin: 0;
+}
+</style>

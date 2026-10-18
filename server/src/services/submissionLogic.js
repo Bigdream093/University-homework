@@ -1,11 +1,13 @@
-import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { db } from '../db.js'
+import { DEFAULT_ASSIGNMENT_FILE_MAX_MB } from '@university-homework/domain/limits'
 import { nowText, isLate } from '../utils/time.js'
-import { safeName } from '../utils/fileFilter.js'
+import { fileExtension, safeName } from '../utils/fileFilter.js'
 import { assignmentAccess, subjectFor, fail } from './access.js'
 import { effectiveDeadline } from './extensions.js'
 import { queueCleanup } from './storage.js'
+import { assignmentGroupMembers, currentSubmission } from './submissionQueries.js'
+import { requiredAnswerError } from '@university-homework/domain/requiredAnswers'
 
 export function saveSubmission({
   assignment,
@@ -13,6 +15,7 @@ export function saveSubmission({
   sourceFile,
   previewFiles = [],
   content,
+  answerQuestion = '',
   baseVersion,
   afterSave,
 }) {
@@ -21,22 +24,29 @@ export function saveSubmission({
       .prepare("SELECT id,username,name,role FROM users WHERE id=? AND role='student'")
       .get(studentId)
     if (!student) fail(404, '学生账号不存在')
-    const currentAssignment = assignmentAccess(assignment.id, student, { write: true })
+    const currentAssignment = assignmentAccess(assignment.id, student, {
+      write: true,
+    })
     if (currentAssignment.status !== 'published') fail(400, '作业当前不可提交')
+    if (String(answerQuestion ?? '') !== (currentAssignment.required_answer || ''))
+      fail(409, '作业必答题目已更新，请刷新页面后确认答案')
     const subject = subjectFor(currentAssignment, student, { submit: true }),
       group = !!subject.group
+    if (group)
+      db.prepare(
+        'DELETE FROM absence_grade_marks WHERE assignment_id=? AND assignment_group_id=?',
+      ).run(currentAssignment.id, subject.group.id)
+    else
+      db.prepare('DELETE FROM absence_grade_marks WHERE assignment_id=? AND student_id=?').run(
+        currentAssignment.id,
+        studentId,
+      )
     const table = group ? 'group_submissions' : 'submissions',
       historyTable = group ? 'group_submission_history' : 'submission_history'
     const foreign = group ? 'group_submission_id' : 'submission_id'
     const file = sourceFile,
       previews = (previewFiles || []).slice()
-    const current = group
-      ? db
-          .prepare('SELECT * FROM group_submissions WHERE assignment_group_id=?')
-          .get(subject.group.id)
-      : db
-          .prepare('SELECT * FROM submissions WHERE assignment_id=? AND student_id=?')
-          .get(currentAssignment.id, studentId)
+    const current = currentSubmission(currentAssignment, subject, studentId)
     // 乐观并发控制：个人与小组（含 append 模式）统一以 submit_count 为版本号，旧页面提交一律 409。
     const version = Number(baseVersion ?? 0)
     if (!Number.isSafeInteger(version) || version < 0) fail(400, '提交版本无效，请刷新页面后重试')
@@ -47,17 +57,28 @@ export function saveSubmission({
           ? '本组已有更新，请刷新后确认再提交'
           : '本次作业已有新的提交记录，请刷新页面确认后再提交',
       )
-    // 次数耗尽后仅"退回重做"状态额外放行一次；重新提交后状态恢复 submitted，额外机会自动消耗。
-    const exhausted =
-      current &&
+    const isReturnedCorrection = current?.status === 'returned'
+    const isVoluntaryResubmission = current?.status === 'submitted'
+    if (current?.status === 'graded')
+      fail(400, '作业已经评分，不能自行修改；如需修改请联系老师退回')
+    if (current && !isReturnedCorrection && !isVoluntaryResubmission)
+      fail(400, '当前作业状态不支持重新提交')
+    if (
+      isVoluntaryResubmission &&
       currentAssignment.allow_resubmit_count !== -1 &&
-      current.submit_count >= currentAssignment.allow_resubmit_count + 1
-    if (exhausted && current.status !== 'returned') fail(400, '已达到允许提交次数')
+      Number(current.resubmit_count || 0) >= currentAssignment.allow_resubmit_count
+    )
+      fail(400, '已达到允许自行重交次数；如需修改请联系老师退回')
     const answer = String(content ?? '').trim()
+    const answerError = requiredAnswerError(currentAssignment.required_answer, answer)
+    if (answerError) fail(400, answerError)
     if (!file && !answer) fail(400, '请上传文件或填写在线作答内容')
     // 文件类作业必须携带文件：否则一段文字就会在覆盖模式下顶掉并删除已提交的文件。
     if (currentAssignment.type !== 'online' && !file) fail(400, '本作业需要上传文件提交')
-    if (file && file.size > (currentAssignment.max_file_mb ?? 200) * 1024 * 1024)
+    if (
+      file &&
+      file.size > (currentAssignment.max_file_mb ?? DEFAULT_ASSIGNMENT_FILE_MAX_MB) * 1024 * 1024
+    )
       fail(400, '文件超过本作业大小限制')
     // 预览图规则：要求时必交且数量 1..N；未要求时不接受。
     if (currentAssignment.type === 'online' && previews.length)
@@ -72,17 +93,19 @@ export function saveSubmission({
       late = isLate(deadline.deadline, at)
     const [date, time] = at.split(' '),
       stamp = date.slice(5) + '-' + time.slice(0, 5)
+    const extension = file ? fileExtension(file.originalname) : ''
     const owner = group ? subject.group.name : student.name
     const name = file
-      ? `${safeName(owner)}_${safeName(student.username)}_${stamp}_${late ? '迟交' : '准时'}${path.extname(file.originalname).toLowerCase()}`
+      ? `${safeName(owner)}_${safeName(student.username)}_${stamp}${extension ? `.${extension}` : ''}`
       : null
     // 库内只保存相对存储键；file.path 仅供本次请求内的文件系统操作使用。
     const values = [
       answer || null,
+      currentAssignment.required_answer || null,
       file?.storageKey || null,
       name,
       file?.size ?? null,
-      file ? path.extname(file.originalname).slice(1).toLowerCase() : null,
+      file ? extension : null,
     ]
     let id = current?.id
     if (current) {
@@ -114,12 +137,12 @@ export function saveSubmission({
           ).run(at, ...oldPreviews.map((row) => row.id))
       }
       db.prepare(
-        `UPDATE ${table} SET content=?,file_url=?,file_name=?,file_size=?,file_type=?,submit_count=submit_count+1,status='submitted',score=NULL,comment=NULL,returned_reason=NULL,is_late=?,submitted_at=?,graded_at=NULL${group ? ',submitted_by=?' : ''} WHERE id=?`,
-      ).run(...values, late, at, ...(group ? [studentId] : []), id)
+        `UPDATE ${table} SET content=?,answer_question=?,file_url=?,file_name=?,file_size=?,file_type=?,submit_count=submit_count+1,resubmit_count=resubmit_count+?,status='submitted',score=NULL,comment=NULL,returned_reason=NULL,is_late=?,submitted_at=?,graded_at=NULL${group ? ',submitted_by=?' : ''} WHERE id=?`,
+      ).run(...values, isVoluntaryResubmission ? 1 : 0, late, at, ...(group ? [studentId] : []), id)
     } else {
       const sql = group
-        ? "INSERT INTO group_submissions(assignment_group_id,content,file_url,file_name,file_size,file_type,submit_count,status,is_late,submitted_at,submitted_by) VALUES(?,?,?,?,?,?,1,'submitted',?,?,?)"
-        : "INSERT INTO submissions(assignment_id,student_id,content,file_url,file_name,file_size,file_type,submit_count,status,is_late,submitted_at) VALUES(?,?,?,?,?,?,?,1,'submitted',?,?)"
+        ? "INSERT INTO group_submissions(assignment_group_id,content,answer_question,file_url,file_name,file_size,file_type,submit_count,status,is_late,submitted_at,submitted_by) VALUES(?,?,?,?,?,?,?,1,'submitted',?,?,?)"
+        : "INSERT INTO submissions(assignment_id,student_id,content,answer_question,file_url,file_name,file_size,file_type,submit_count,status,is_late,submitted_at) VALUES(?,?,?,?,?,?,?,?,1,'submitted',?,?)"
       id = db
         .prepare(sql)
         .run(
@@ -132,7 +155,7 @@ export function saveSubmission({
     }
     const history = db
       .prepare(
-        `INSERT INTO ${historyTable}(${foreign},content,file_url,file_name,file_size,file_type,file_state,is_late,submitted_at${group ? ',submitted_by' : ''}) VALUES(?,?,?,?,?,?,?,?,?${group ? ',?' : ''})`,
+        `INSERT INTO ${historyTable}(${foreign},content,answer_question,file_url,file_name,file_size,file_type,file_state,is_late,submitted_at${group ? ',submitted_by' : ''}) VALUES(?,?,?,?,?,?,?,?,?,?${group ? ',?' : ''})`,
       )
       .run(id, ...values, file ? 'available' : 'online', late, at, ...(group ? [studentId] : []))
     const historyId = history.lastInsertRowid
@@ -153,13 +176,7 @@ export function saveSubmission({
         at,
       )
     })
-    const members = group
-      ? db
-          .prepare(
-            'SELECT student_id,username_snapshot username,name_snapshot name FROM assignment_group_members WHERE assignment_group_id=? ORDER BY student_id',
-          )
-          .all(subject.group.id)
-      : null
+    const members = group ? assignmentGroupMembers(subject.group.id, { ordered: true }) : null
     const previewSnapshot = previews.map((preview, index) => ({
       name: safeName(preview.originalname),
       size: preview.size,
@@ -170,12 +187,14 @@ export function saveSubmission({
       course_id: currentAssignment.course_id,
       course_name: currentAssignment.course_name,
       assignment_title: currentAssignment.title,
+      answer_question: currentAssignment.required_answer || null,
+      answer,
       work_mode: currentAssignment.work_mode,
       student: { username: student.username, name: student.name },
       group: group ? { id: subject.group.id, name: subject.group.name, members } : null,
       file_name: name,
       file_size: file?.size ?? null,
-      file_type: values[4],
+      file_type: file ? extension : null,
       file_state: file ? 'available' : 'online',
       preview_count: previewSnapshot.length,
       previews: previewSnapshot,
@@ -183,9 +202,13 @@ export function saveSubmission({
       is_late: !!late,
       effective_deadline: deadline.deadline,
       extension: deadline.extension
-        ? { id: deadline.extension.id, approved_deadline: deadline.extension.approved_deadline }
+        ? {
+            id: deadline.extension.id,
+            approved_deadline: deadline.extension.approved_deadline,
+          }
         : null,
       submit_count: (current?.submit_count || 0) + 1,
+      resubmit_count: (current?.resubmit_count || 0) + (isVoluntaryResubmission ? 1 : 0),
     }
     const receiptNo = 'MH-' + randomUUID()
     db.prepare(

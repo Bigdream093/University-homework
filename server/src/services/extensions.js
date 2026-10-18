@@ -1,4 +1,5 @@
 import { db } from '../db.js'
+import { LIMITS } from '@university-homework/domain/limits'
 import { nowText, validTime } from '../utils/time.js'
 import { assignmentAccess, fail, requireRole, subjectFor, textValue } from './access.js'
 
@@ -18,7 +19,7 @@ export function effectiveDeadline(assignment, subject) {
     extension: extension || null,
   }
 }
-export function listExtensions(assignment, user) {
+function listExtensions(assignment, user) {
   if (user.role === 'teacher')
     return db
       .prepare(
@@ -73,7 +74,7 @@ function insertExtension(assignment, user, body) {
       subject.student_id || null,
       subject.assignment_group_id || null,
       user.id,
-      textValue(body.reason, '延期理由', 2000),
+      textValue(body.reason, '延期理由', LIMITS.reason),
       requested,
       'pending',
       at,
@@ -128,7 +129,7 @@ export function decideExtension(extensionId, user, body) {
       if (!current || !validTime(deadline) || deadline <= at || deadline <= current)
         fail(400, '批准时间必须晚于当前截止时间和现在')
     }
-    const reason = textValue(body.decision_reason, '审批说明', 2000, status === 'rejected')
+    const reason = textValue(body.decision_reason, '审批说明', LIMITS.reason, status === 'rejected')
     db.prepare(
       'UPDATE extension_requests SET status=?,approved_deadline=?,decision_reason=?,decided_by=?,decided_at=? WHERE id=?',
     ).run(status, deadline, reason, user.id, at, extension.id)

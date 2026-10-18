@@ -25,6 +25,11 @@ jobs:
       - run: npm ci
       - run: npm run check:runtime
       - run: npm test
+      - run: npm run verify:backup
+      - run: node server/scripts/verify-concurrent-upload.mjs
+        env:
+          LOAD_STUDENTS: '10'
+          LOAD_FILE_MB: '5'
       - run: npm ci --prefix desktop
       - run: npm test --prefix desktop
       - run: npx playwright install --with-deps chromium

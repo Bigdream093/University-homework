@@ -5,9 +5,11 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
-    "test": "node --test"
+    "lint": "eslint --config eslint.config.js src",
+    "test": "npm run lint && node --test"
   },
   "dependencies": {
+    "@university-homework/domain": "*",
     "archiver": "5.3.2",
     "bcryptjs": "^3.0.2",
     "better-sqlite3": "^12.4.1",
@@ -21,6 +23,7 @@
     "sharp": "^0.35.4"
   },
   "devDependencies": {
+    "eslint": "^10.10.0",
     "supertest": "^7.1.4"
   },
   "engines": {

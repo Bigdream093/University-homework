@@ -4,6 +4,8 @@
 
 服务端与前端由 Express 单进程同时提供（生产模式），同一套 Web 界面打包为教师端 / 学生端 Electron 桌面客户端，也提供 Docker 镜像用于 NAS 部署。
 
+维护说明：见 [桌面更新配置与发布](desktop/UPDATES.md)、[NAS 部署与备份](server/help/maintenance.md)、[NAS 升级步骤](deploy/nas/使用说明.txt) 和 [浏览器测试说明](test/browser/README.md)。
+
 ## 功能特性
 
 **课程与名单**
@@ -38,13 +40,18 @@
 | --- | --- |
 | 服务端 [`server/`](server/) | Node.js 24 LTS、Express 5、better-sqlite3、Multer、ExcelJS、Sharp、bcryptjs、JWT |
 | Web 前端 [`web/`](web/) | Vue 3、Vite、Element Plus、Pinia、Vue Router、Axios、hash-wasm |
+| 共享业务规则 [`packages/domain/`](packages/domain/) | 前后端共用的成绩、必答题、文件约束和提交摘要等纯 JavaScript 规则 |
 | 桌面端 [`desktop/`](desktop/) | Electron + electron-builder（教师端 / 学生端，Windows & macOS arm64） |
 | 部署 | Docker Compose、绿联 NAS 离线包 |
+
+架构决策：[共享业务规则为何独立为 workspace 包](docs/adr/0001-shareable-domain-package.md)。
 
 npm workspaces 单仓结构：
 
 ```
 university-homework/
+├── packages/
+│   └── domain/    # 前后端共用且不依赖运行框架的业务规则
 ├── server/        # Express API、SQLite 迁移、帮助手册、验收脚本
 │   ├── src/       # 路由、中间件、服务、迁移
 │   ├── help/      # 角色 help 手册（Markdown）
@@ -118,6 +125,7 @@ npm run build:desktop:student:mac    # 学生端（macOS arm64）
 | `UPLOAD_REQUEST_TIMEOUT_MS` | `7200000` | 服务端允许的上传请求时长（2 小时） |
 | `CSP_MODE` | `enforce` | CSP 强制执行；排查资源拦截时可暂设 `report-only`，排查完成后恢复 |
 | `TRUST_PROXY_HOPS` | `0` | 受信任的反向代理层数 |
+| `CORS_ORIGINS` | 空（不限制） | 跨域白名单，逗号分隔的来源；同源部署无需设置，仅前端与服务端不同源时填写 |
 | `DATA_DIR` | `./data` | 数据库目录（Docker 内为 `/app/data`） |
 | `UPLOAD_DIR` | `./uploads` | 附件目录（Docker 内为 `/app/uploads`） |
 | `TZ` | — | 生产环境必须为 `Asia/Shanghai`，否则拒绝启动 |
@@ -168,7 +176,7 @@ node server/scripts/verify-existing-migration.mjs server/data/homework.sqlite
 - 学生成绩与教师评语不会由学生接口返回；文件下载同时校验角色、课程成员资格和个人/小组归属。
 - 上传文件流式落盘并在写入时同步计算指纹，不为去重再次完整读盘；前端不设固定超时。
 - 局域网或公网 HTTP 页面也支持分片上传、断点续传和分片重试：浏览器没有 WebCrypto 时自动使用兼容哈希实现。
-- 上传文件对教师显示并下载为“姓名_学号_提交时间_准时或迟交.扩展名”，服务器内部文件名保持唯一。
+- 上传文件对教师显示并下载为“姓名_学号_提交时间.扩展名”，服务器内部文件名保持唯一；迟交状态单独记录，不再写入文件名。
 - 提交时间与超时状态只按服务器时间计算。
 - 学生退出课程后不再访问该课程历史资源。
 - 不要把 `.env`、`data/`、`uploads/` 或备份提交到 GitHub。

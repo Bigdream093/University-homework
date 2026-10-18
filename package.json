@@ -1,24 +1,30 @@
 {
   "name": "university-homework",
   "private": true,
-  "version": "1.7.2",
+  "version": "1.8.0",
   "workspaces": [
     "server",
-    "web"
+    "web",
+    "packages/domain"
   ],
   "scripts": {
     "dev": "concurrently -n server,web -c blue,green \"npm run dev -w server\" \"npm run dev -w web\"",
-    "build": "npm run build -w web",
+    "build": "npm run check:shared-boundary && npm run build -w web && npm run build:info",
+    "build:info": "node scripts/build-info.cjs",
+    "release:manifest": "node scripts/release-manifest.cjs",
+    "test:tools": "node --test scripts/test/*.test.cjs",
+    "verify:backup": "node server/scripts/verify-backup-restore.mjs",
     "build:desktop": "npm run build --prefix desktop",
     "build:desktop:teacher": "npm run build:teacher --prefix desktop",
     "build:desktop:student": "npm run build:student --prefix desktop",
     "build:desktop:student:mac": "npm run build:student:mac --prefix desktop",
     "start": "npm run start -w server",
-    "test": "npm run test -w server && npm run test:frontend",
+    "test": "npm run check:shared-boundary && npm run lint -w @university-homework/domain && npm run test -w server && npm run test:frontend && npm run test:tools",
     "test:frontend": "npm run lint -w web && npm run format:check -w web && npm run test -w web",
     "verify": "npm run build -w web && npm run build --prefix desktop",
     "test:browser": "npm run build && playwright test",
-    "check:runtime": "node scripts/check-runtime.cjs"
+    "check:runtime": "node scripts/check-runtime.cjs",
+    "check:shared-boundary": "node scripts/check-shared-boundary.cjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

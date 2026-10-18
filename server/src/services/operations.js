@@ -7,7 +7,7 @@ import { queueCleanup, promoteUpload, processCleanupBatch } from './storage.js'
 
 // 标识当前进程：服务重启后据此判定哪些 processing 记录属于已消失的旧进程。
 const processOwner = randomUUID()
-export function requestKey(req) {
+function requestKey(req) {
   const key = req.get('Idempotency-Key') || randomUUID()
   if (!/^[a-zA-Z0-9_-]{8,100}$/.test(key)) fail(400, '无效的上传请求编号')
   return key

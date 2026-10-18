@@ -6,10 +6,20 @@ import { createPinia, setActivePinia } from 'pinia'
 import api from '../src/api/request.js'
 import { useUserStore } from '../src/stores/user.js'
 import { readUser, readToken, saveSession } from '../src/utils/session.js'
-import { mountView as mountComponent, nodes as findNodes, textOf, settle } from './helpers/view-harness.js'
+import {
+  mountView as mountComponent,
+  nodes as findNodes,
+  textOf,
+  settle,
+} from './helpers/view-harness.js'
 
 // 复用现有渲染器；登录专用的宿主环境留在本测试中。
-const originalGlobals = new Map(['navigator', 'location'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]))
+const originalGlobals = new Map(
+  ['navigator', 'location'].map((name) => [
+    name,
+    Object.getOwnPropertyDescriptor(globalThis, name),
+  ]),
+)
 afterEach(() => {
   setActivePinia(undefined)
   for (const [name, descriptor] of originalGlobals) {
@@ -18,24 +28,38 @@ afterEach(() => {
   }
 })
 
-async function mountView(relativePath, { response = [], userAgent = '', query = {}, failure } = {}) {
-  const requests = [], navigations = []
+async function mountView(
+  relativePath,
+  { response = [], userAgent = '', query = {}, failure } = {},
+) {
+  const requests = [],
+    navigations = []
   Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { userAgent } })
-  Object.defineProperty(globalThis, 'location', { configurable: true, value: {
-    pathname: '/login', assign: target => navigations.push(target),
-  } })
+  Object.defineProperty(globalThis, 'location', {
+    configurable: true,
+    value: {
+      pathname: '/login',
+      assign: (target) => navigations.push(target),
+    },
+  })
   setActivePinia(createPinia())
   const view = await mountComponent(relativePath.replace('../src/', ''), {
-    handler: async config => {
+    handler: async (config) => {
       requests.push(config)
       if (failure) throw { config, response: { status: 401, data: { message: failure } } }
       return response
     },
     dependencies: {
-      'vue-router': { useRouter: () => ({ push: target => navigations.push(target) }), useRoute: () => ({ query }) },
+      'vue-router': {
+        useRouter: () => ({ push: (target) => navigations.push(target) }),
+        useRoute: () => ({ query }),
+      },
       '../stores/user.js': { useUserStore },
-      '../../composables/useUpload.js': { newRequestId: () => 'test-request', intentSignature: JSON.stringify },
-      '../../composables/useRefresh.js': { useRefresh: load => Vue.onMounted(load) },
+      '../../composables/useUpload.js': {
+        newRequestId: () => 'test-request',
+        intentSignature: JSON.stringify,
+      },
+      '../../composables/useRefresh.js': { useRefresh: (load) => Vue.onMounted(load) },
     },
   })
   return { ...view, requests, navigations }
@@ -51,15 +75,34 @@ async function submitLogin(view) {
 }
 
 const course = {
-  id: 7, name: '规划设计', code: 'PLAN', status: 'active', invite_code: 'ABC123',
-  student_count: 2, assignment_count: 3,
+  id: 7,
+  name: '规划设计',
+  code: 'PLAN',
+  status: 'active',
+  invite_code: 'ABC123',
+  student_count: 2,
+  assignment_count: 3,
+  latest_assignment_id: 9,
+  latest_assignment_title: '最近截止作业',
+  latest_work_mode: 'group',
+  latest_expected_count: 25,
+  latest_unsubmitted_count: 23,
+  pending_review_count: 3,
 }
 
 test('教师：非空课程列表显示课程和邀请码，无渲染异常', async () => {
   const view = await mountView('../src/views/teacher/TeacherCourses.vue', { response: [course] })
-  assert.deepEqual(view.errors.map((error) => error.message), [])
+  assert.deepEqual(
+    view.errors.map((error) => error.message),
+    [],
+  )
   assert.match(textOf(view.root), /规划设计/)
-  assert.match(textOf(view.root), /邀请码 ABC123/)
+  assert.match(textOf(view.root), /23未交数/)
+  assert.doesNotMatch(textOf(view.root), /23\/25/)
+  assert.match(textOf(view.root), /未交数/)
+  assert.ok(findNodes(view.root, 'div').some((node) => node.props.title === '最近截止作业'))
+  assert.match(textOf(view.root), /未批改/)
+  assert.doesNotMatch(textOf(view.root), /邀请码|ABC123/)
   findNodes(view.root, 'article')[0].props.onClick()
   assert.equal(view.navigations[0], '/teacher/courses/7')
 })
@@ -70,13 +113,28 @@ test('教师：空列表正常显示空态', async () => {
   assert.match(textOf(view.root), /还没有课程/)
 })
 
+test('教师：课程列表加载失败显示原因和重试入口', async () => {
+  const view = await mountView('../src/views/teacher/TeacherCourses.vue', {
+    failure: '课程列表加载失败',
+  })
+  assert.match(textOf(view.root), /课程列表加载失败/)
+  assert.equal(
+    findNodes(view.root, 'el-button').some((node) => textOf(node).trim() === '重试'),
+    true,
+  )
+  assert.deepEqual(view.errors, [])
+})
+
 test('教师：切换归档筛选后展示已归档课程', async () => {
   const view = await mountView('../src/views/teacher/TeacherCourses.vue', {
     response: [{ ...course, status: 'archived', invite_code: null }],
   })
   findNodes(view.root, 'el-radio-group')[0].props['onUpdate:modelValue']('archived')
   await settle()
-  assert.deepEqual(view.errors.map((error) => error.message), [])
+  assert.deepEqual(
+    view.errors.map((error) => error.message),
+    [],
+  )
   assert.equal(findNodes(view.root, 'article').length, 1)
   assert.doesNotMatch(textOf(view.root), /邀请码 null/)
 })
@@ -85,17 +143,22 @@ for (const mustChangePassword of [0, 1]) {
   test(`学生登录：must_change_password=${mustChangePassword} 时保存会话并正确跳转`, async () => {
     const user = { id: 2, role: 'student', must_change_password: mustChangePassword }
     const view = await mountView('../src/views/LoginView.vue', {
-      userAgent: 'KexuStudent/1.3.2', response: { token: 'student-token', user },
+      userAgent: 'KexuStudent/1.3.2',
+      response: { token: 'student-token', user },
     })
     await submitLogin(view)
     assert.deepEqual(view.errors, [])
     assert.deepEqual(view.messages, [])
     assert.equal(view.requests[0].url, '/auth/login')
-    assert.deepEqual(JSON.parse(view.requests[0].data), { username: '20260001', password: '123456' })
+    assert.deepEqual(JSON.parse(view.requests[0].data), {
+      username: '20260001',
+      password: '123456',
+    })
     assert.equal(readToken(), 'student-token')
     assert.deepEqual(readUser(), user)
-    assert.deepEqual(view.navigations, [mustChangePassword
-      ? { path: '/password', query: {} } : '/student/courses'])
+    assert.deepEqual(view.navigations, [
+      mustChangePassword ? { path: '/password', query: {} } : '/student/courses',
+    ])
     assert.equal(findNodes(view.root, 'el-button')[0].props.loading, false)
   })
 }
@@ -132,10 +195,16 @@ test('学生：登录落地页加载并展示课程，无渲染异常', async ()
   assert.equal(view.navigations[0], '/student/courses/7')
 })
 
-for (const redirect of ['/student/courses/7', '//outside.example', '/login', 'https://outside.example']) {
+for (const redirect of [
+  '/student/courses/7',
+  '//outside.example',
+  '/login',
+  'https://outside.example',
+]) {
   test(`登录跳转：${redirect}`, async () => {
     const view = await mountView('../src/views/LoginView.vue', {
-      query: { redirect }, response: { token: 'token', user: { role: 'student' } },
+      query: { redirect },
+      response: { token: 'token', user: { role: 'student' } },
     })
     await submitLogin(view)
     assert.deepEqual(view.errors, [])
@@ -170,7 +239,17 @@ for (const viewPath of ['teacher/TeacherCourses', 'student/StudentCourses']) {
   test(`${viewPath}：课程请求失败显示错误且无渲染崩溃`, async () => {
     const view = await mountView(`../src/views/${viewPath}.vue`, { failure: '登录状态已失效' })
     assert.deepEqual(view.errors, [])
-    assert.deepEqual(view.messages, [{ level: 'error', text: '登录状态已失效' }])
+    if (viewPath.startsWith('student/')) {
+      const alerts = findNodes(view.root, 'el-alert')
+      assert.equal(alerts.length, 1)
+      assert.equal(alerts[0].props.title, '登录状态已失效')
+    } else {
+      assert.match(textOf(view.root), /登录状态已失效/)
+      assert.equal(
+        findNodes(view.root, 'el-button').some((node) => textOf(node).trim() === '重试'),
+        true,
+      )
+    }
     assert.equal(findNodes(view.root, 'article').length, 0)
   })
 }
@@ -180,7 +259,10 @@ test('学生课程筛选：进行中、已归档、全部', async () => {
     response: [course, { ...course, id: 8, status: 'archived' }],
   })
   assert.equal(findNodes(view.root, 'article').length, 1)
-  for (const [status, count] of [['archived', 1], ['all', 2]]) {
+  for (const [status, count] of [
+    ['archived', 1],
+    ['all', 2],
+  ]) {
     findNodes(view.root, 'el-radio-group')[0].props['onUpdate:modelValue'](status)
     await settle()
     assert.equal(findNodes(view.root, 'article').length, count)
@@ -191,11 +273,16 @@ test('学生课程筛选：进行中、已归档、全部', async () => {
 for (const matchingPasswords of [false, true]) {
   test(`改密：确认密码${matchingPasswords ? '一致' : '不一致'}`, async () => {
     const view = await mountView('../src/views/PasswordView.vue', {
-      query: { redirect: '/student/courses/7' }, response: {},
+      query: { redirect: '/student/courses/7' },
+      response: {},
     })
     saveSession('token', { role: 'student', must_change_password: 1 })
     const inputs = findNodes(view.root, 'el-input')
-    for (const [index, value] of ['123456', 'new-password', matchingPasswords ? 'new-password' : 'different'].entries()) {
+    for (const [index, value] of [
+      '123456',
+      'new-password',
+      matchingPasswords ? 'new-password' : 'different',
+    ].entries()) {
       inputs[index].props['onUpdate:modelValue'](value)
     }
     await Vue.nextTick()
@@ -224,28 +311,75 @@ function loadRouteGuard() {
     .replace(/^import .+$/gm, '')
     .replace('export default router', 'return router')
   new Function('createRouter', 'createWebHistory', 'LoginView', 'readUser', source)(
-    () => ({ beforeEach: (callback) => { guard = callback } }),
-    () => ({}), {}, readUser,
+    () => ({
+      beforeEach: (callback) => {
+        guard = callback
+      },
+    }),
+    () => ({}),
+    {},
+    readUser,
   )
   return guard
 }
 
 const guardCases = [
   { name: '匿名可访问登录页', user: null, path: '/login', meta: { public: true }, expected: true },
-  { name: '匿名访问受保护页返回登录', user: null, path: '/student/courses', meta: { role: 'student' }, expected: { path: '/login', query: { redirect: '/student/courses' } } },
-  { name: '学生禁止进入教师页', user: { role: 'student' }, path: '/teacher/courses', meta: { role: 'teacher' }, expected: '/student/courses' },
-  { name: '教师禁止进入学生页', user: { role: 'teacher' }, path: '/student/courses', meta: { role: 'student' }, expected: '/teacher/courses' },
-  { name: '首次登录强制改密', user: { role: 'student', must_change_password: 1 }, path: '/student/courses', meta: { role: 'student' }, expected: { path: '/password', query: { redirect: '/student/courses' } } },
-  { name: '改密页不循环重定向', user: { role: 'student', must_change_password: 1 }, path: '/password', meta: {}, expected: undefined },
-  { name: '已有学生会话可访问课程', user: { role: 'student' }, path: '/student/courses', meta: { role: 'student' }, expected: undefined },
+  {
+    name: '匿名访问受保护页返回登录',
+    user: null,
+    path: '/student/courses',
+    meta: { role: 'student' },
+    expected: { path: '/login', query: { redirect: '/student/courses' } },
+  },
+  {
+    name: '学生禁止进入教师页',
+    user: { role: 'student' },
+    path: '/teacher/courses',
+    meta: { role: 'teacher' },
+    expected: '/student/courses',
+  },
+  {
+    name: '教师禁止进入学生页',
+    user: { role: 'teacher' },
+    path: '/student/courses',
+    meta: { role: 'student' },
+    expected: '/teacher/courses',
+  },
+  {
+    name: '首次登录强制改密',
+    user: { role: 'student', must_change_password: 1 },
+    path: '/student/courses',
+    meta: { role: 'student' },
+    expected: { path: '/password', query: { redirect: '/student/courses' } },
+  },
+  {
+    name: '改密页不循环重定向',
+    user: { role: 'student', must_change_password: 1 },
+    path: '/password',
+    meta: {},
+    expected: undefined,
+  },
+  {
+    name: '已有学生会话可访问课程',
+    user: { role: 'student' },
+    path: '/student/courses',
+    meta: { role: 'student' },
+    expected: undefined,
+  },
 ]
 for (const scenario of guardCases) {
   test(`路由守卫：${scenario.name}`, async () => {
     await mountView('../src/views/LoginView.vue')
     if (scenario.user) saveSession('token', scenario.user)
-    assert.deepEqual(loadRouteGuard()({
-      path: scenario.path, fullPath: scenario.path, meta: scenario.meta,
-    }), scenario.expected)
+    assert.deepEqual(
+      loadRouteGuard()({
+        path: scenario.path,
+        fullPath: scenario.path,
+        meta: scenario.meta,
+      }),
+      scenario.expected,
+    )
   })
 }
 
@@ -255,8 +389,10 @@ test('会话：损坏的用户 JSON 清除会话，受保护页退回登录', as
   localStorage.setItem('hw_token', 'token')
   assert.equal(readUser(), null)
   assert.equal(readToken(), '')
-  assert.deepEqual(loadRouteGuard()({ path: '/student/courses', fullPath: '/student/courses', meta: {} }),
-    { path: '/login', query: { redirect: '/student/courses' } })
+  assert.deepEqual(
+    loadRouteGuard()({ path: '/student/courses', fullPath: '/student/courses', meta: {} }),
+    { path: '/login', query: { redirect: '/student/courses' } },
+  )
 })
 
 test('请求：携带会话令牌，非登录请求 401 清除会话并保留回跳地址', async () => {

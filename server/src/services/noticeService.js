@@ -1,10 +1,17 @@
 import { validateEditorImages } from '../services/editorImageAccess.js'
 import { contentFormat } from '../domain/contentFormat.js'
+import { LIMITS } from '@university-homework/domain/limits'
 import { contentSummary } from '../domain/richText.js'
 import { db } from '../db.js'
 import { contentValue, courseAccess, fail, textValue } from './access.js'
 import { isFuture, nowText } from '../utils/time.js'
 import { moveContent, nextOrder } from './contentOrder.js'
+
+function recordNoticeRevision(id, revision, title, content, at, format) {
+  db.prepare(
+    'INSERT INTO notice_revisions(notice_id,revision,title,content,changed_at,content_format) VALUES(?,?,?,?,?,?)',
+  ).run(id, revision, title, content, at, format)
+}
 
 function noticeAccess(id, user, write = false) {
   const notice = db.prepare('SELECT * FROM notices WHERE id=?').get(id)
@@ -26,64 +33,60 @@ export function publishDueNotices(at = nowText()) {
     return rows.length
   })()
 }
-export function listNotices(courseId, user, res) {
+export function listNotices(courseId, user) {
   courseAccess(courseId, user)
   if (user.role === 'teacher')
-    return res.json(
-      db
-        .prepare(
-          'SELECT n.*,(SELECT count(*) FROM notice_reads r WHERE r.notice_id=n.id AND EXISTS(SELECT 1 FROM course_students cs WHERE cs.course_id=n.course_id AND cs.student_id=r.student_id)) read_count FROM notices n WHERE course_id=? ORDER BY pinned DESC,sort_order,id',
-        )
-        .all(courseId),
-    )
+    return db
+      .prepare(
+        'SELECT n.*,(SELECT count(*) FROM notice_reads r WHERE r.notice_id=n.id AND EXISTS(SELECT 1 FROM course_students cs WHERE cs.course_id=n.course_id AND cs.student_id=r.student_id)) read_count FROM notices n WHERE course_id=? ORDER BY pinned DESC,sort_order,id',
+      )
+      .all(courseId)
   const rows = db
     .prepare(
       "SELECT n.*,r.first_read_at,r.last_seen_revision FROM notices n LEFT JOIN notice_reads r ON r.notice_id=n.id AND r.student_id=? WHERE n.course_id=? AND n.status IN ('published','withdrawn') ORDER BY pinned DESC,n.sort_order,n.id",
     )
     .all(user.id, courseId)
-  res.json(
-    rows.map((notice) => ({
-      id: notice.id,
-      title: notice.status === 'withdrawn' ? '已撤回的通知' : notice.title,
-      status: notice.status,
-      pinned: notice.pinned,
-      created_at: notice.created_at,
-      published_at: notice.published_at,
-      scheduled_at: notice.scheduled_at,
-      updated_at: notice.updated_at,
-      withdrawn_at: notice.withdrawn_at,
-      content_revision: notice.content_revision,
-      // 摘要按字符数组截断，避免代理对（emoji）被切成乱码。
-      content_preview:
-        notice.status === 'withdrawn'
-          ? '该通知已被教师撤回'
-          : contentSummary(notice.content, notice.content_format),
-      is_read: !!notice.first_read_at,
-      is_updated:
-        notice.status === 'published' &&
-        !!notice.first_read_at &&
-        notice.last_seen_revision < notice.content_revision,
-    })),
-  )
+  return rows.map((notice) => ({
+    id: notice.id,
+    title: notice.status === 'withdrawn' ? '已撤回的通知' : notice.title,
+    status: notice.status,
+    pinned: notice.pinned,
+    created_at: notice.created_at,
+    published_at: notice.published_at,
+    scheduled_at: notice.scheduled_at,
+    updated_at: notice.updated_at,
+    withdrawn_at: notice.withdrawn_at,
+    content_revision: notice.content_revision,
+    // 摘要按字符数组截断，避免代理对（emoji）被切成乱码。
+    content_preview:
+      notice.status === 'withdrawn'
+        ? '该通知已被教师撤回'
+        : contentSummary(notice.content, notice.content_format),
+    is_read: !!notice.first_read_at,
+    is_updated:
+      notice.status === 'published' &&
+      !!notice.first_read_at &&
+      notice.last_seen_revision < notice.content_revision,
+  }))
 }
-export function getNotice(id, user, res) {
+export function getNotice(id, user) {
   const notice = noticeAccess(id, user)
   if (user.role === 'teacher')
-    return res.json({
+    return {
       ...notice,
       revisions: db
         .prepare('SELECT * FROM notice_revisions WHERE notice_id=? ORDER BY revision DESC')
         .all(id),
-    })
+    }
   if (notice.status === 'withdrawn')
-    return res.json({
+    return {
       id: notice.id,
       title: '已撤回的通知',
       status: notice.status,
       withdrawn_at: notice.withdrawn_at,
-    })
+    }
   if (notice.status !== 'published') fail(404, '通知尚未发布')
-  res.json({
+  return {
     id: notice.id,
     title: notice.title,
     content: notice.content,
@@ -93,9 +96,9 @@ export function getNotice(id, user, res) {
     updated_at: notice.updated_at,
     scheduled_at: notice.scheduled_at,
     content_revision: notice.content_revision,
-  })
+  }
 }
-export function markRead(id, user, res, body = {}) {
+export function markRead(id, user, body = {}) {
   if (user.role !== 'student') fail(403, '只登记学生阅读')
   const notice = noticeAccess(id, user)
   if (notice.status !== 'published') fail(409, '通知当前不可登记阅读')
@@ -106,28 +109,26 @@ export function markRead(id, user, res, body = {}) {
   db.prepare(
     'INSERT INTO notice_reads(notice_id,student_id,first_read_at,last_read_at,last_seen_revision) VALUES(?,?,?,?,?) ON CONFLICT(notice_id,student_id) DO UPDATE SET last_read_at=excluded.last_read_at,last_seen_revision=MAX(last_seen_revision,excluded.last_seen_revision)',
   ).run(id, user.id, at, at, revision)
-  res.json({ message: '已记录查看' })
+  return { message: '已记录查看' }
 }
-export function readers(id, teacherId, res) {
+export function readers(id, teacherId) {
   noticeAccess(id, { id: teacherId, role: 'teacher' })
-  res.json(
-    db
-      .prepare(
-        'SELECT u.username,u.name,r.first_read_at,r.last_read_at,r.last_seen_revision FROM notice_reads r JOIN notices n ON n.id=r.notice_id JOIN course_students cs ON cs.course_id=n.course_id AND cs.student_id=r.student_id JOIN users u ON u.id=r.student_id WHERE r.notice_id=? ORDER BY r.first_read_at,u.username',
-      )
-      .all(id),
-  )
+  return db
+    .prepare(
+      'SELECT u.username,u.name,r.first_read_at,r.last_read_at,r.last_seen_revision FROM notice_reads r JOIN notices n ON n.id=r.notice_id JOIN course_students cs ON cs.course_id=n.course_id AND cs.student_id=r.student_id JOIN users u ON u.id=r.student_id WHERE r.notice_id=? ORDER BY r.first_read_at,u.username',
+    )
+    .all(id)
 }
 function statusInput(body) {
   const status = body.status || 'draft'
   if (!['draft', 'scheduled', 'published'].includes(status)) fail(400, '发布状态无效')
   return status
 }
-export function createNotice(courseId, teacherId, body, res) {
+export function createNotice(courseId, teacherId, body) {
   courseAccess(courseId, { id: teacherId, role: 'teacher' }, { write: true })
-  const title = textValue(body.title, '通知标题', 200),
+  const title = textValue(body.title, '通知标题', LIMITS.noticeTitle),
     format = contentFormat(body.content_format),
-    content = contentValue(body.content, format, '通知正文', 50000, false),
+    content = contentValue(body.content, format, '通知正文', LIMITS.richText, false),
     status = statusInput(body),
     at = nowText()
   const scheduled = status === 'scheduled' ? String(body.scheduled_at || '') : null
@@ -153,14 +154,12 @@ export function createNotice(courseId, teacherId, body, res) {
         at,
         format,
       )
-    db.prepare(
-      'INSERT INTO notice_revisions(notice_id,revision,title,content,changed_at,content_format) VALUES(?,?,?,?,?,?)',
-    ).run(result.lastInsertRowid, 1, title, content, at, format)
+    recordNoticeRevision(result.lastInsertRowid, 1, title, content, at, format)
     return result.lastInsertRowid
   })()
-  res.status(201).json(db.prepare('SELECT * FROM notices WHERE id=?').get(id))
+  return db.prepare('SELECT * FROM notices WHERE id=?').get(id)
 }
-export function updateNotice(id, teacherId, body, res) {
+export function updateNotice(id, teacherId, body) {
   const saved = db.transaction(() => {
     const notice = noticeAccess(id, { id: teacherId, role: 'teacher' }, true)
     if (notice.status === 'withdrawn') fail(409, '已撤回通知不能修改')
@@ -175,9 +174,15 @@ export function updateNotice(id, teacherId, body, res) {
           : null
     if (status === 'scheduled' && !isFuture(scheduled))
       fail(400, '定时发布时间必须是有效的未来北京时间')
-    const title = textValue(body.title ?? notice.title, '通知标题', 200),
+    const title = textValue(body.title ?? notice.title, '通知标题', LIMITS.noticeTitle),
       format = contentFormat(body.content_format ?? notice.content_format),
-      content = contentValue(body.content ?? notice.content, format, '通知正文', 50000, false),
+      content = contentValue(
+        body.content ?? notice.content,
+        format,
+        '通知正文',
+        LIMITS.richText,
+        false,
+      ),
       at = nowText()
     validateEditorImages(content, format, { id: teacherId, role: 'teacher' })
     const changed =
@@ -197,15 +202,12 @@ export function updateNotice(id, teacherId, body, res) {
       format,
       id,
     )
-    if (changed)
-      db.prepare(
-        'INSERT INTO notice_revisions(notice_id,revision,title,content,changed_at,content_format) VALUES(?,?,?,?,?,?)',
-      ).run(id, revision, title, content, at, format)
+    if (changed) recordNoticeRevision(id, revision, title, content, at, format)
     return db.prepare('SELECT * FROM notices WHERE id=?').get(id)
   })()
-  res.json(saved)
+  return saved
 }
-export function withdrawNotice(id, teacherId, body = {}, res) {
+export function withdrawNotice(id, teacherId, body = {}) {
   db.transaction(() => {
     const notice = noticeAccess(id, { id: teacherId, role: 'teacher' }, true)
     if (notice.status === 'withdrawn') return
@@ -213,17 +215,17 @@ export function withdrawNotice(id, teacherId, body = {}, res) {
     const at = nowText()
     db.prepare(
       "UPDATE notices SET status='withdrawn',withdrawn_at=?,withdrawn_reason=?,updated_at=? WHERE id=?",
-    ).run(at, textValue(body.reason || '教师撤回', '原因', 2000), at, id)
+    ).run(at, textValue(body.reason || '教师撤回', '原因', LIMITS.reason), at, id)
   })()
-  res.json({ message: '通知已撤回，历史已保留' })
+  return { message: '通知已撤回，历史已保留' }
 }
-export function deleteDraftNotice(id, teacherId, res) {
+export function deleteDraftNotice(id, teacherId) {
   const notice = noticeAccess(id, { id: teacherId, role: 'teacher' }, true)
   if (notice.status !== 'draft') fail(400, '只有草稿可删除；定时通知先取消，已发布通知请撤回')
   db.prepare('DELETE FROM notices WHERE id=?').run(id)
-  res.json({ message: '草稿已删除' })
+  return { message: '草稿已删除' }
 }
-export function moveNotice(id, teacherId, direction, res) {
+export function moveNotice(id, teacherId, direction) {
   const notice = noticeAccess(id, { id: teacherId, role: 'teacher' }, true)
   const moved = moveContent({
     table: 'notices',
@@ -234,5 +236,5 @@ export function moveNotice(id, teacherId, direction, res) {
     extraWhere: 'AND pinned=?',
     extraArgs: [notice.pinned],
   })
-  res.json({ moved })
+  return { moved }
 }

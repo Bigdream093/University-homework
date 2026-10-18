@@ -99,7 +99,9 @@ test('published and closed assignments freeze work mode even without submissions
     assert.deepEqual(row('assignments', a.id), before)
   }
   const draft = await assignment(f, { status: 'draft' })
-  await call(f.teacher, 'put', `/assignments/${draft.id}`, { work_mode: 'group' })
+  await call(f.teacher, 'put', `/assignments/${draft.id}`, {
+    work_mode: 'group',
+  })
   assert.equal(row('assignments', draft.id).work_mode, 'group')
 })
 
@@ -122,7 +124,9 @@ test('invalid group publication leaves draft and lock unchanged, including faile
   for (const invalid of ['missing', 'empty', 'submitter', 'unenrolled']) {
     const a = await assignment(f, { work_mode: 'group', status: 'draft' })
     if (invalid !== 'missing') {
-      await call(f.teacher, 'post', `/assignments/${a.id}/groups/snapshot`, { group_ids: [g.id] })
+      await call(f.teacher, 'post', `/assignments/${a.id}/groups/snapshot`, {
+        group_ids: [g.id],
+      })
       const snapshot = db
         .prepare('SELECT id FROM assignment_groups WHERE assignment_id=?')
         .get(a.id)
@@ -171,7 +175,14 @@ for (const failingTable of ['extension_requests', 'notices']) {
     db.exec(`CREATE TEMP TRIGGER fail_archive BEFORE UPDATE ON ${failingTable}
       BEGIN SELECT RAISE(ABORT, 'injected archive failure'); END`)
     try {
-      await call(f.teacher, 'post', `/courses/${f.course.id}/archive`, {}, 500)
+      const requestId = 'deadbeef-1234'
+      const failedArchive = await request(app)
+        .post(`/api/courses/${f.course.id}/archive`)
+        .set('Authorization', `Bearer ${jwt.sign({ id: f.teacher.id }, process.env.JWT_SECRET)}`)
+        .set('X-Client-Reference', requestId)
+        .send({})
+      assert.equal(failedArchive.status, 500)
+      assert.equal(failedArchive.body.request_id, requestId)
       assert.deepEqual(
         [row('courses', f.course.id), row('extension_requests', e.id), row('notices', n.id)],
         before,
@@ -199,7 +210,9 @@ test('snapshot replacement rolls back deleted and newly inserted groups on forei
   const g = await group(f),
     foreign = await group(other)
   const a = await assignment(f, { work_mode: 'group', status: 'draft' })
-  await call(f.teacher, 'post', `/assignments/${a.id}/groups/snapshot`, { group_ids: [g.id] })
+  await call(f.teacher, 'post', `/assignments/${a.id}/groups/snapshot`, {
+    group_ids: [g.id],
+  })
   const readSnapshot = () => ({
     groups: db
       .prepare('SELECT * FROM assignment_groups WHERE assignment_id=? ORDER BY id')
@@ -218,7 +231,9 @@ test('snapshot replacement rolls back deleted and newly inserted groups on forei
   )
   assert.deepEqual(readSnapshot(), before)
   const { snapshotGroups } = await import('../src/services/groupService.js')
-  assert.throws(() => snapshotGroups(a.id, f.teacher, [g.id, foreign.id]), { status: 400 })
+  assert.throws(() => snapshotGroups(a.id, f.teacher, [g.id, foreign.id]), {
+    status: 400,
+  })
   assert.deepEqual(readSnapshot(), before)
 })
 
@@ -267,18 +282,22 @@ test('outsider teacher and enrolled student cannot mutate teacher-owned operatio
 })
 
 test('extension services enforce ownership, state and deadlines without HTTP middleware', async () => {
-  const { applyExtension, decideExtension, withdrawExtension } = await import(
-    '../src/services/extensions.js'
-  )
+  const { applyExtension, decideExtension, withdrawExtension } =
+    await import('../src/services/extensions.js')
   const f = await fixture(),
     a = await assignment(f)
-  const body = { reason: '直接申请', requested_deadline: '2099-02-01 00:00:00' }
+  const body = {
+    reason: '直接申请',
+    requested_deadline: '2099-02-01 00:00:00',
+  }
   assert.throws(() => applyExtension(a.id, f.teacher, body), { status: 403 })
   const e = applyExtension(a.id, f.student, body)
   assert.throws(() => applyExtension(a.id, f.student, body), { status: 409 })
   const before = row('extension_requests', e.id)
   for (const actor of [f.student, f.outsider]) {
-    assert.throws(() => decideExtension(e.id, actor, { status: 'approved' }), { status: 403 })
+    assert.throws(() => decideExtension(e.id, actor, { status: 'approved' }), {
+      status: 403,
+    })
   }
   for (const deadline of ['invalid', '2000-01-01 00:00:00', a.deadline]) {
     assert.throws(
@@ -303,7 +322,9 @@ test('extension services enforce ownership, state and deadlines without HTTP mid
     ...body,
     requested_deadline: '2099-03-01 00:00:00',
   })
-  assert.throws(() => withdrawExtension(next.id, user('student')), { status: 404 })
+  assert.throws(() => withdrawExtension(next.id, user('student')), {
+    status: 404,
+  })
   assert.throws(() => withdrawExtension(next.id, f.teacher), { status: 403 })
   withdrawExtension(next.id, f.student)
   assert.equal(row('extension_requests', next.id).status, 'withdrawn')
@@ -319,13 +340,11 @@ test('teacher services reject wrong roles, foreign owners and archived course wr
     removeAssignment,
     moveAssignment,
   } = await import('../src/services/assignmentService.js')
-  const { createGroup, updateGroup, removeGroup, snapshotGroups, setGroupSubmitter } = await import(
-    '../src/services/groupService.js'
-  )
+  const { createGroup, updateGroup, removeGroup, snapshotGroups, setGroupSubmitter } =
+    await import('../src/services/groupService.js')
   const { archiveCourse } = await import('../src/services/courseService.js')
-  const { applyExtension, decideExtension, withdrawExtension } = await import(
-    '../src/services/extensions.js'
-  )
+  const { applyExtension, decideExtension, withdrawExtension } =
+    await import('../src/services/extensions.js')
   const f = await fixture(),
     a = await assignment(f),
     g = await group(f),
@@ -335,7 +354,11 @@ test('teacher services reject wrong roles, foreign owners and archived course wr
   const snapshot = db
     .prepare('SELECT id FROM assignment_groups WHERE assignment_id=?')
     .get(grouped.id)
-  const groupBody = { name: '新组名', member_ids: [f.student.id], leader_id: f.student.id }
+  const groupBody = {
+    name: '新组名',
+    member_ids: [f.student.id],
+    leader_id: f.student.id,
+  }
   const operations = [
     (actor) => createAssignment(f.course.id, actor, { title: '新作业' }),
     (actor) => updateAssignment(a.id, actor, { title: '新标题' }),
@@ -359,14 +382,15 @@ test('teacher services reject wrong roles, foreign owners and archived course wr
   archiveCourse(f.course.id, f.teacher)
   for (const operation of operations) assert.throws(() => operation(f.teacher), { status: 409 })
   assert.throws(() => archiveCourse(f.course.id, f.teacher), { status: 409 })
-  assert.throws(() => applyExtension(a.id, f.student, { reason: '归档后' }), { status: 409 })
+  assert.throws(() => applyExtension(a.id, f.student, { reason: '归档后' }), {
+    status: 409,
+  })
   assert.throws(() => withdrawExtension(e.id, f.student), { status: 409 })
 })
 
 test('assignment service freezes modes and owns deadline cancellation rollback', async () => {
-  const { createAssignment, updateAssignment, publishAssignment, closeAssignment } = await import(
-    '../src/services/assignmentService.js'
-  )
+  const { createAssignment, updateAssignment, publishAssignment, closeAssignment } =
+    await import('../src/services/assignmentService.js')
   const f = await fixture(),
     a = await assignment(f),
     e = await extension(f, a)
@@ -388,7 +412,10 @@ test('assignment service freezes modes and owns deadline cancellation rollback',
   assert.throws(() => updateAssignment(a.id, f.teacher, { work_mode: 'group' }), { status: 400 })
   closeAssignment(a.id, f.teacher)
   assert.throws(() => updateAssignment(a.id, f.teacher, { work_mode: 'group' }), { status: 400 })
-  const draft = createAssignment(f.course.id, f.teacher, { title: '分组草稿', work_mode: 'group' })
+  const draft = createAssignment(f.course.id, f.teacher, {
+    title: '分组草稿',
+    work_mode: 'group',
+  })
   assert.throws(() => publishAssignment(draft.id, f.teacher), { status: 400 })
   assert.equal(row('assignments', draft.id).status, 'draft')
   assert.equal(row('assignments', draft.id).groups_locked, 0)
@@ -396,9 +423,8 @@ test('assignment service freezes modes and owns deadline cancellation rollback',
 })
 
 test('group service validates members and rolls roster replacement back on insert failure', async () => {
-  const { createGroup, updateGroup, snapshotGroups, setGroupSubmitter } = await import(
-    '../src/services/groupService.js'
-  )
+  const { createGroup, updateGroup, snapshotGroups, setGroupSubmitter } =
+    await import('../src/services/groupService.js')
   const { publishAssignment } = await import('../src/services/assignmentService.js')
   const f = await fixture(),
     g = await group(f)
@@ -457,7 +483,9 @@ test('group service validates members and rolls roster replacement back on inser
   const a = await assignment(f, { work_mode: 'group', status: 'draft' })
   snapshotGroups(a.id, f.teacher, [g.id])
   const snapshot = db.prepare('SELECT * FROM assignment_groups WHERE assignment_id=?').get(a.id)
-  assert.throws(() => setGroupSubmitter(snapshot.id, f.teacher, inactive.id), { status: 400 })
+  assert.throws(() => setGroupSubmitter(snapshot.id, f.teacher, inactive.id), {
+    status: 400,
+  })
   setGroupSubmitter(snapshot.id, f.teacher, f.student.id)
   publishAssignment(a.id, f.teacher)
   assert.throws(() => snapshotGroups(a.id, f.teacher, [g.id]), { status: 400 })
@@ -465,7 +493,9 @@ test('group service validates members and rolls roster replacement back on inser
     f.course.id,
     f.student.id,
   )
-  assert.throws(() => setGroupSubmitter(snapshot.id, f.teacher, f.student.id), { status: 400 })
+  assert.throws(() => setGroupSubmitter(snapshot.id, f.teacher, f.student.id), {
+    status: 400,
+  })
 })
 
 test('student statistics preserve zero rows, mixed submission counts, course scope and ordering', async () => {
@@ -534,7 +564,9 @@ test('student statistics preserve zero rows, mixed submission counts, course sco
   assert.equal(actual[0].status, 'disabled')
   assert.deepEqual(await call(f.teacher, 'get', `/courses/${f.course.id}/students`), actual)
   for (const actor of [f.student, f.outsider]) {
-    assert.throws(() => listCourseStudents(f.course.id, actor), { status: 403 })
+    assert.throws(() => listCourseStudents(f.course.id, actor), {
+      status: 403,
+    })
   }
   // 保留旧排序的 NULL 回退及空课程行为。
   db.prepare('UPDATE course_students SET sort_order=NULL WHERE course_id=?').run(f.course.id)

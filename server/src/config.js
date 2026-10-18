@@ -27,11 +27,22 @@ if (!Number.isSafeInteger(trustProxyHops) || trustProxyHops < 0 || trustProxyHop
 const here = path.dirname(fileURLToPath(import.meta.url))
 const serverRoot = path.resolve(here, '..')
 
+// 跨域白名单：生产环境建议用 CORS_ORIGINS 显式列出前端与桌面端来源；留空表示不额外限制
+// （开发时 Vite 走代理不产生跨域，桌面端为本地来源，均不受影响）。
+const corsOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean)
+  : []
+if (process.env.CORS_ORIGINS && !corsOrigins.length)
+  throw new Error('CORS_ORIGINS 已设置但没有解析出有效来源')
+
 export const config = {
   // Windows 上 3000 可能处于系统保留端口段；开发模式与 Vite 统一使用 34567。
   // 生产环境仍由 Docker 的 PORT=3000 显式指定，不受这里影响。
   port: Number(process.env.PORT || (process.env.npm_lifecycle_event === 'dev' ? 34567 : 3000)),
   jwtSecret: jwtSecret || 'dev-only-change-this-secret',
+  corsOrigins,
   uploadMaxMb,
   materialUploadMaxMb,
   uploadRequestTimeoutMs,

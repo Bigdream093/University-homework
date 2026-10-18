@@ -1,0 +1,20 @@
+{
+  "name": "@university-homework/domain",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./limits": "./src/limits.js",
+    "./requiredAnswers": "./src/requiredAnswers.js",
+    "./gradeScores": "./src/gradeScores.js",
+    "./numbers": "./src/numbers.js",
+    "./fileExtensions": "./src/fileExtensions.js",
+    "./editorImagePattern": "./src/editorImagePattern.js",
+    "./summaryText": "./src/summaryText.js",
+    "./gradingSummary": "./src/gradingSummary.js",
+    "./submissionFilename": "./src/submissionFilename.js"
+  },
+  "scripts": {
+    "lint": "eslint --config eslint.config.js src"
+  }
+}

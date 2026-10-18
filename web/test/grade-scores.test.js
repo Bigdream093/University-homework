@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { computeScores, computeRawScores } from '../../server/src/domain/gradeScores.js'
+import { computeScores, computeRawScores } from '@university-homework/domain/gradeScores'
+import { parseGradeScore } from '../src/utils/grading.js'
 const a = (id, extra = {}) => ({
   id,
   total_score: 100,
@@ -82,4 +83,15 @@ test('shared scores: fractional weights and normalized decimals round only at ou
     computeScores(cells, assignments, { ...config, daily_ratio: 35, final_ratio: 65 }),
     { daily_score: 82.9, final_score: 88.9, total_score: 86.8 },
   )
+})
+
+test('grading input validation shares an inclusive score range and rejects blanks', () => {
+  assert.equal(parseGradeScore('0', 100), 0)
+  assert.equal(parseGradeScore('87.5', 100), 87.5)
+  assert.equal(parseGradeScore('100', 100), 100)
+  assert.equal(parseGradeScore('', 100), null)
+  assert.equal(parseGradeScore('100.1', 100), null)
+  assert.equal(parseGradeScore('-0.1', 100), null)
+  assert.equal(parseGradeScore('abc', 100), null)
+  assert.equal(parseGradeScore('10', Number.NaN), null)
 })

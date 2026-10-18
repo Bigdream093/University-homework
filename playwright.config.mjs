@@ -12,7 +12,10 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   outputDir: `test-results/browser-${target}`,
-  reporter: [['list'], ['html', { outputFolder: `test-results/browser-${target}-report`, open: 'never' }]],
+  reporter: [
+    ['list'],
+    ['html', { outputFolder: `test-results/browser-${target}-report`, open: 'never' }],
+  ],
   use: {
     actionTimeout: 15_000,
     baseURL: external || 'http://127.0.0.1:39061',
@@ -22,9 +25,11 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
-  webServer: external ? undefined : {
-    command: 'node test/browser/start-server.mjs',
-    url: 'http://127.0.0.1:39061',
-    reuseExistingServer: false,
-  },
+  webServer: external
+    ? undefined
+    : {
+        command: 'node test/browser/start-server.mjs',
+        url: 'http://127.0.0.1:39061',
+        reuseExistingServer: false,
+      },
 })

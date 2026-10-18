@@ -2,6 +2,8 @@
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import api, { messageOf } from '../api/request.js'
+import RequiredAnswerContent from './RequiredAnswerContent.vue'
+import { normalizeSubmissionFileName } from '../utils/submissionFiles.js'
 const props = defineProps({ apiBase: String })
 const emit = defineEmits(['download'])
 const visible = ref(false),
@@ -15,6 +17,12 @@ const states = {
   missing: '实体文件缺失',
 }
 async function open() {
+  if (!props.apiBase) {
+    history.value = []
+    receipts.value = []
+    visible.value = true
+    return
+  }
   try {
     const [historyResponse, receiptsResponse] = await Promise.all([
       api.get(props.apiBase + '/history'),
@@ -36,13 +44,15 @@ function download(url, name, kind, extra = {}) {
     fileName: name,
   })
 }
+defineExpose({ open })
 </script>
 <template>
-  <el-button :disabled="!apiBase" @click="open">历史与回执</el-button>
+  <el-button @click="open">历史与回执</el-button>
   <el-dialog v-model="visible" title="提交历史与回执" width="min(780px,94vw)">
     <p class="hint">
       回执保存提交时的事实；旧文件的当前可用状态另外显示。旧数据可能没有回执，不补造未知信息。
     </p>
+    <p v-if="!receipts.length && !history.length" class="empty">暂无提交历史与回执。</p>
     <article v-for="receipt in receipts" :key="receipt.receipt_no" class="assignment-card">
       <b>{{ receipt.receipt_no }}</b>
       <p>{{ receipt.snapshot.course_name }} / {{ receipt.snapshot.assignment_title }}</p>
@@ -64,11 +74,15 @@ function download(url, name, kind, extra = {}) {
         }}
       </p>
       <p>
-        文件：{{ receipt.snapshot.file_name || '在线作答' }} · 提交时：{{
-          states[receipt.snapshot.file_state] || '未知'
+        文件：{{ normalizeSubmissionFileName(receipt.snapshot.file_name) || '在线作答' }} ·
+        提交时：{{ states[receipt.snapshot.file_state] || '未知' }} · 当前：{{
+          states[receipt.current_file_state] || '未知'
         }}
-        · 当前：{{ states[receipt.current_file_state] || '未知' }}
       </p>
+      <RequiredAnswerContent
+        :questions="receipt.snapshot.answer_question"
+        :content="receipt.snapshot.answer"
+      />
       <el-button
         @click="
           download(
@@ -83,15 +97,24 @@ function download(url, name, kind, extra = {}) {
     </article>
     <h3>全部提交历史</h3>
     <article v-for="historyRecord in history" :key="historyRecord.id" class="assignment-card">
-      <b>{{ historyRecord.submitted_at }} · {{ historyRecord.file_name || '在线作答' }}</b>
-      <p>{{ states[historyRecord.file_state] }}</p>
-      <p style="white-space: pre-wrap">{{ historyRecord.content }}</p>
+      <b
+        >{{ historyRecord.submitted_at }} ·
+        {{ normalizeSubmissionFileName(historyRecord.file_name) || '在线作答' }}</b
+      >
+      <p>
+        {{ historyRecord.is_late ? '迟交' : '准时' }} ·
+        {{ states[historyRecord.file_state] }}
+      </p>
+      <RequiredAnswerContent
+        :questions="historyRecord.answer_question"
+        :content="historyRecord.content"
+      />
       <el-button
         v-if="['available', 'online'].includes(historyRecord.file_state)"
         @click="
           download(
             apiBase + '/file?history_id=' + historyRecord.id,
-            historyRecord.file_name || '在线作答.txt',
+            normalizeSubmissionFileName(historyRecord.file_name) || '在线作答.txt',
             'submission-file',
             { historyId: historyRecord.id },
           )

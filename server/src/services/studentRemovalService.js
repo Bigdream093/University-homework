@@ -1,4 +1,5 @@
 import { db } from '../db.js'
+import bcrypt from 'bcryptjs'
 import { nowText } from '../utils/time.js'
 import { queueCleanup } from './storage.js'
 
@@ -21,8 +22,12 @@ export function removalImpact(courseId, studentId) {
     (SELECT count(*) FROM material_downloads d JOIN materials m ON m.id=d.material_id WHERE m.course_id=? AND d.student_id=?) count`,
     )
     .get(courseId, studentId, courseId, studentId).count
+  const otherCourseEnrollments = db
+    .prepare('SELECT count(*) count FROM course_students WHERE student_id=? AND course_id<>?')
+    .get(studentId, courseId).count
   return {
     ...student,
+    other_course_enrollments: otherCourseEnrollments,
     submissions: value(
       'SELECT count(*) count FROM submissions s JOIN assignments a ON a.id=s.assignment_id WHERE a.course_id=? AND s.student_id=?',
     ),
@@ -107,10 +112,11 @@ export function removeStudent(courseId, studentId) {
   const files = [...individualFiles(courseId, studentId), ...emptyGroupFiles(courseId, studentId)]
   const sessions = db
     .prepare(
-      `SELECT f.temporary_path path FROM upload_session_files f JOIN upload_sessions s ON s.id=f.session_id JOIN assignments a ON a.id=s.assignment_id WHERE a.course_id=? AND s.actor_id=?`,
+      'SELECT f.temporary_path path FROM upload_session_files f JOIN upload_sessions s ON s.id=f.session_id JOIN assignments a ON a.id=s.assignment_id WHERE a.course_id=? AND s.actor_id=?',
     )
     .all(courseId, studentId)
     .map((row) => row.path)
+  let accountDisabled = false
   db.transaction(() => {
     queueCleanup([...files, ...sessions], '移除学生')
     anonymizeGroupReceipts(courseId, student)
@@ -180,6 +186,17 @@ export function removeStudent(courseId, studentId) {
       courseId,
       studentId,
     )
+    const remainingEnrollment = db
+      .prepare('SELECT 1 FROM course_students WHERE student_id=? LIMIT 1')
+      .get(studentId)
+    if (!remainingEnrollment) {
+      db.prepare(
+        `UPDATE users
+         SET password_hash=?,status='disabled',must_change_password=1,auth_version=auth_version+1
+         WHERE id=? AND role='student'`,
+      ).run(bcrypt.hashSync('123456', 10), studentId)
+      accountDisabled = true
+    }
   })()
-  return student
+  return { ...student, accountDisabled }
 }

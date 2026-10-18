@@ -30,6 +30,15 @@ test('health endpoint is available', async () => {
   const response = await request(app).get('/api/health')
   assert.equal(response.status, 200)
   assert.equal(response.body.ok, true)
+  const sourcePackage = JSON.parse(
+    fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
+  )
+  assert.equal(response.body.version, sourcePackage.version)
+  assert.equal(response.body.build.version, sourcePackage.version)
+  assert.ok(
+    response.body.build.source_sha256 === null ||
+      /^[a-f0-9]{64}$/.test(response.body.build.source_sha256),
+  )
 })
 
 test('teacher can log in and access courses', async () => {
@@ -69,11 +78,19 @@ test('complete workflow: course, assignment, submit, grade and privacy boundary'
     .send({ username: '20260001', password: '123456' })
   const teacherToken = teacherLogin.body.token,
     studentToken = studentLogin.body.token
+  const absentUsername = `2026${String(Date.now()).slice(-8)}`
+  const absentStudentId = db
+    .prepare(`INSERT INTO users(username,password_hash,name,role) VALUES(?,?,?,'student')`)
+    .run(absentUsername, bcrypt.hashSync('123456', 4), '未交学生').lastInsertRowid
 
   const course = await request(app)
     .post('/api/courses')
     .set('Authorization', `Bearer ${teacherToken}`)
-    .send({ name: `自动测试课程-${Date.now()}`, code: 'TEST', description: '自动化完整流程' })
+    .send({
+      name: `自动测试课程-${Date.now()}`,
+      code: 'TEST',
+      description: '自动化完整流程',
+    })
   assert.equal(course.status, 201)
 
   const addStudent = await request(app)
@@ -81,6 +98,11 @@ test('complete workflow: course, assignment, submit, grade and privacy boundary'
     .set('Authorization', `Bearer ${teacherToken}`)
     .send({ username: '20260001', name: '演示学生' })
   assert.ok([200, 201].includes(addStudent.status))
+  const addAbsentStudent = await request(app)
+    .post(`/api/courses/${course.body.id}/students`)
+    .set('Authorization', `Bearer ${teacherToken}`)
+    .send({ username: absentUsername, name: '未交学生' })
+  assert.ok([200, 201].includes(addAbsentStudent.status))
 
   const assignment = await request(app)
     .post(`/api/courses/${course.body.id}/assignments`)
@@ -94,6 +116,13 @@ test('complete workflow: course, assignment, submit, grade and privacy boundary'
     })
   assert.equal(assignment.status, 201)
 
+  const policy = await request(app)
+    .get(`/api/assignments/${assignment.body.id}/submission-policy`)
+    .set('Authorization', `Bearer ${studentToken}`)
+  assert.equal(policy.status, 200)
+  assert.equal(typeof policy.body.is_late, 'boolean')
+  assert.equal(policy.body.can_submit, true)
+
   const submit = await request(app)
     .post(`/api/assignments/${assignment.body.id}/submit`)
     .set('Authorization', `Bearer ${studentToken}`)
@@ -103,14 +132,105 @@ test('complete workflow: course, assignment, submit, grade and privacy boundary'
   const list = await request(app)
     .get(`/api/assignments/${assignment.body.id}/submissions`)
     .set('Authorization', `Bearer ${teacherToken}`)
-  const record = list.body.find((row) => row.username === '20260001')
+  assert.equal(list.status, 200)
+  assert.equal(list.body.page, 1)
+  assert.equal(list.body.page_size, 50)
+  const record = list.body.rows.find((row) => row.username === '20260001')
   assert.ok(record?.id)
 
-  const grade = await request(app)
+  const removedSingleGrade = await request(app)
     .post(`/api/submissions/${record.id}/grade`)
     .set('Authorization', `Bearer ${teacherToken}`)
-    .send({ score: 92, comment: '完成良好' })
+    .send({ score: 92 })
+  assert.equal(removedSingleGrade.status, 404)
+  const removedSingleReturn = await request(app)
+    .post(`/api/submissions/${record.id}/return`)
+    .set('Authorization', `Bearer ${teacherToken}`)
+    .send({ returned_reason: '旧路由不再支持' })
+  assert.equal(removedSingleReturn.status, 404)
+
+  const paged = await request(app)
+    .get(`/api/assignments/${assignment.body.id}/submissions?page=1&page_size=1`)
+    .set('Authorization', `Bearer ${teacherToken}`)
+  assert.equal(paged.status, 200)
+  assert.equal(paged.body.total, 2)
+  assert.equal(paged.body.rows.length, 1)
+  assert.equal(paged.body.counts.submitted, 1)
+
+  const inbox = await request(app)
+    .get('/api/teacher/pending-reviews?page=1&page_size=20')
+    .set('Authorization', `Bearer ${teacherToken}`)
+  assert.equal(inbox.status, 200)
+  assert.equal(inbox.body.total, 1)
+  assert.equal(inbox.body.rows[0].assignment_id, assignment.body.id)
+
+  for (const score of [null, '']) {
+    const emptyGrade = await request(app)
+      .post(`/api/assignments/${assignment.body.id}/batch-grade`)
+      .set('Authorization', `Bearer ${teacherToken}`)
+      .send({ score, items: [{ id: record.id, kind: 'individual' }] })
+    assert.equal(emptyGrade.status, 200)
+    assert.equal(emptyGrade.body.failure_count, 1)
+    assert.equal(emptyGrade.body.results[0].success, false)
+  }
+  const zeroGrade = await request(app)
+    .post(`/api/assignments/${assignment.body.id}/batch-grade`)
+    .set('Authorization', `Bearer ${teacherToken}`)
+    .send({ score: 0, items: [{ id: record.id, kind: 'individual' }] })
+  assert.equal(zeroGrade.status, 200)
+  assert.equal(zeroGrade.body.success_count, 1)
+
+  const grade = await request(app)
+    .post(`/api/assignments/${assignment.body.id}/batch-grade`)
+    .set('Authorization', `Bearer ${teacherToken}`)
+    .send({
+      score: 92,
+      comment: '完成良好',
+      items: [
+        {
+          id: record.id,
+          kind: 'individual',
+          expected_status: 'graded',
+          expected_submit_count: record.submit_count,
+        },
+      ],
+    })
   assert.equal(grade.status, 200)
+  assert.equal(grade.body.success_count, 1)
+
+  const batchGrade = await request(app)
+    .post(`/api/assignments/${assignment.body.id}/batch-grade`)
+    .set('Authorization', `Bearer ${teacherToken}`)
+    .send({
+      score: 0,
+      comment: '批量核验',
+      items: [
+        {
+          id: record.id,
+          kind: 'individual',
+          expected_status: 'graded',
+          expected_submit_count: record.submit_count,
+        },
+        { student_id: absentStudentId, kind: 'individual' },
+      ],
+    })
+  assert.equal(batchGrade.status, 200)
+  assert.equal(batchGrade.body.success_count, 2)
+  const rowsAfterBatch = await request(app)
+    .get(`/api/assignments/${assignment.body.id}/submissions`)
+    .set('Authorization', `Bearer ${teacherToken}`)
+  const absenceRow = rowsAfterBatch.body.rows.find((row) => row.student_id === absentStudentId)
+  assert.equal(absenceRow.id, null)
+  assert.equal(absenceRow.absence_graded, true)
+  assert.equal(absenceRow.score, 0)
+
+  const absentStudentLogin = await request(app)
+    .post('/api/auth/login')
+    .send({ username: absentUsername, password: '123456' })
+  const absentSubmission = await request(app)
+    .get(`/api/assignments/${assignment.body.id}/my-submission`)
+    .set('Authorization', `Bearer ${absentStudentLogin.body.token}`)
+  assert.equal(absentSubmission.body, null)
 
   const studentView = await request(app)
     .get(`/api/assignments/${assignment.body.id}/my-submission`)
@@ -124,6 +244,23 @@ test('complete workflow: course, assignment, submit, grade and privacy boundary'
     .set('Authorization', `Bearer ${teacherToken}`)
   assert.equal(exported.status, 200)
   assert.match(exported.headers['content-type'], /spreadsheetml/)
+
+  const batchReturn = await request(app)
+    .post(`/api/assignments/${assignment.body.id}/batch-return`)
+    .set('Authorization', `Bearer ${teacherToken}`)
+    .send({
+      returned_reason: '请补充说明',
+      items: [
+        {
+          id: record.id,
+          kind: 'individual',
+          expected_status: 'graded',
+          expected_submit_count: record.submit_count,
+        },
+      ],
+    })
+  assert.equal(batchReturn.status, 200)
+  assert.equal(batchReturn.body.success_count, 1)
 
   await request(app)
     .delete(`/api/courses/${course.body.id}`)
@@ -143,7 +280,11 @@ test('grade summary: config validation, weighted scores, regrade and export in r
   const course = await request(app)
     .post('/api/courses')
     .set(auth(teacherToken))
-    .send({ name: `汇总课程-${Date.now()}`, code: 'SUM', description: '成绩汇总测试' })
+    .send({
+      name: `汇总课程-${Date.now()}`,
+      code: 'SUM',
+      description: '成绩汇总测试',
+    })
   assert.equal(course.status, 201)
   const courseId = course.body.id
 
@@ -258,13 +399,14 @@ test('grade summary: config validation, weighted scores, regrade and export in r
     const list = await request(app)
       .get(`/api/assignments/${assignmentId}/submissions`)
       .set(auth(teacherToken))
-    const record = list.body.find((row) => row.username === username)
+    const record = list.body.rows.find((row) => row.username === username)
     assert.ok(record?.id)
     const grade = await request(app)
-      .post(`/api/submissions/${record.id}/grade`)
+      .post(`/api/assignments/${assignmentId}/batch-grade`)
       .set(auth(teacherToken))
-      .send({ score })
+      .send({ score, items: [{ id: record.id, kind: 'individual' }] })
     assert.equal(grade.status, 200)
+    assert.equal(grade.body.success_count, 1)
     return record.id
   }
   await gradeAs(a1.body.id, '20260101', 80)
@@ -301,10 +443,21 @@ test('grade summary: config validation, weighted scores, regrade and export in r
   // 汇总里修改成绩：甲一 a1 80 → 90，平时 (90×20+0×20)÷40 = 45，总 = 45×0.4+70×0.6 = 60。
   const cell = students[0].cells[a1.body.id]
   const regrade = await request(app)
-    .post(`/api${cell.api_base}/grade`)
+    .post(`/api/assignments/${a1.body.id}/batch-grade`)
     .set(auth(teacherToken))
-    .send({ score: 90 })
+    .send({
+      score: 90,
+      items: [
+        {
+          id: Number(cell.api_base.split('/').at(-1)),
+          kind: 'individual',
+          expected_status: cell.status,
+          expected_submit_count: cell.submit_count,
+        },
+      ],
+    })
   assert.equal(regrade.status, 200)
+  assert.equal(regrade.body.success_count, 1)
   const after = await request(app).get(`/api/courses/${courseId}/summary`).set(auth(teacherToken))
   near(after.body.students[0].cells[a1.body.id].score, 90)
   near(after.body.students[0].scores.daily_score, 45)
@@ -329,10 +482,19 @@ test('grade summary: config validation, weighted scores, regrade and export in r
   assert.ok(sheet)
   assert.equal(sheet.columnCount, 5)
   assert.equal(sheet.rowCount, 3)
-  assert.deepEqual(sheet.getRow(1).values.slice(1), ['姓名', '学号', '平时成绩', '期末成绩', '总成绩'])
+  assert.deepEqual(sheet.getRow(1).values.slice(1), [
+    '姓名',
+    '学号',
+    '平时成绩',
+    '期末成绩',
+    '总成绩',
+  ])
   assert.deepEqual(sheet.getRow(2).values.slice(1), ['甲一', '20260101', 45, 70, 60])
   assert.deepEqual(sheet.getRow(3).values.slice(1), ['乙二', '20260102', 30, '—', 30])
-  for (const [row, columns] of [[2, [3, 4, 5]], [3, [3, 5]]])
+  for (const [row, columns] of [
+    [2, [3, 4, 5]],
+    [3, [3, 5]],
+  ])
     for (const column of columns) assert.equal(typeof sheet.getCell(row, column).value, 'number')
 
   await request(app).delete(`/api/courses/${courseId}`).set(auth(teacherToken))

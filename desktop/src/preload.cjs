@@ -4,6 +4,9 @@ contextBridge.exposeInMainWorld('kexuDesktop', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   testServer: (serverUrl) => ipcRenderer.invoke('server:test', serverUrl),
   saveServer: (serverUrl) => ipcRenderer.invoke('server:save', serverUrl),
+  getSavedCredentials: () => ipcRenderer.invoke('credentials:get'),
+  saveCredentials: (credentials) => ipcRenderer.invoke('credentials:save', credentials),
+  clearCredentials: (username) => ipcRenderer.invoke('credentials:clear', { username }),
 })
 
 contextBridge.exposeInMainWorld('mohenDesktop', {

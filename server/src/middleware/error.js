@@ -1,4 +1,4 @@
-export function errorHandler(err, _req, res, _next) {
+export function errorHandler(err, req, res, _next) {
   const multerMessages = {
     LIMIT_PART_COUNT: '上传内容部分过多',
     LIMIT_FILE_SIZE: '上传文件超过大小限制',
@@ -10,20 +10,20 @@ export function errorHandler(err, _req, res, _next) {
   }
   const multerError = typeof err.code === 'string' && err.code.startsWith('LIMIT_')
   const status = err.status || (err.code === 'LIMIT_FILE_SIZE' ? 413 : multerError ? 400 : 500)
+  const rawReference = String(req.get('x-client-reference') || '')
+  const requestId = /^[a-f0-9-]{8,64}$/i.test(rawReference) ? rawReference : ''
   if (multerError && !err.status && multerMessages[err.code]) err.message = multerMessages[err.code]
   // 507（磁盘空间不足）已向上游返回可读信息，不再重复记录为服务器错误。
-  if (status >= 500 && status !== 507) console.error(err)
+  if (status >= 500 && status !== 507) {
+    if (requestId) console.error(`[request:${requestId}]`, err)
+    else console.error(err)
+  }
   if (res.headersSent) return res.end()
-  res
-    .status(status)
-    .json({
-      message:
-        status >= 500 && !err.expose
-          ? '服务器处理失败，请联系管理员检查日志'
-          : err.message || '请求处理失败',
-    })
-}
-
-export function asyncRoute(fn) {
-  return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next)
+  res.status(status).json({
+    message:
+      status >= 500 && !err.expose
+        ? '服务器处理失败，请联系管理员检查日志'
+        : err.message || '请求处理失败',
+    ...(requestId ? { request_id: requestId } : {}),
+  })
 }

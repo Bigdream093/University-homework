@@ -4,11 +4,21 @@ const { EventEmitter } = require('node:events')
 const http = require('node:http')
 const { once } = require('node:events')
 const { createUpdateController } = require('../src/updater.cjs')
-const { normalizeUpdateBase, validateMacManifest, fetchMacManifest } = require('../src/update-policy.cjs')
+const {
+  normalizeUpdateBase,
+  validateMacManifest,
+  fetchMacManifest,
+} = require('../src/update-policy.cjs')
 const { makeBuildConfig } = require('../scripts/build-config.cjs')
 
-const mac = { version: '1.6.7', role: 'student', platform: 'darwin', arch: 'arm64',
-  file: '墨痕学生端-macOS-arm64-1.6.7.dmg', notes: '更新说明' }
+const mac = {
+  version: '1.6.7',
+  role: 'student',
+  platform: 'darwin',
+  arch: 'arm64',
+  file: '墨痕学生端-macOS-arm64-1.6.7.dmg',
+  notes: '更新说明',
+}
 const directory = 'http://localhost/update/student/mac-arm64/'
 
 function fixture(overrides = {}) {
@@ -19,12 +29,25 @@ function fixture(overrides = {}) {
     updater.emit('update-not-available')
     return {}
   }
-  updater.quitAndInstall = () => { calls.installs++ }
+  updater.quitAndInstall = () => {
+    calls.installs++
+  }
   const controller = createUpdateController({
     app: { isPackaged: true, getVersion: () => '1.6.6' },
-    role: 'student', platform: 'win32', arch: 'x64', baseUrl: 'http://localhost/update/',
-    getWindowsUpdater: () => { calls.constructed++; return updater },
-    dialog: { showMessageBox: async (options) => { calls.dialogs.push(options); return { response: 1 } } },
+    role: 'student',
+    platform: 'win32',
+    arch: 'x64',
+    baseUrl: 'http://localhost/update/',
+    getWindowsUpdater: () => {
+      calls.constructed++
+      return updater
+    },
+    dialog: {
+      showMessageBox: async (options) => {
+        calls.dialogs.push(options)
+        return { response: 1 }
+      },
+    },
     shell: { openExternal: async (url) => calls.urls.push(url) },
     ...overrides,
   })
@@ -61,7 +84,11 @@ test('download locks repeated checks and only explicit confirmed install runs in
   updater.checkForUpdates = async () => {
     calls.checks++
     updater.emit('update-available')
-    return { downloadPromise: new Promise((resolve) => { resolveDownload = resolve }) }
+    return {
+      downloadPromise: new Promise((resolve) => {
+        resolveDownload = resolve
+      }),
+    }
   }
   const checking = controller.check()
   await new Promise((resolve) => setImmediate(resolve))
@@ -82,7 +109,10 @@ test('cancel or active transfers prevent restart; transfer state is checked afte
   for (const mode of ['cancel', 'busy', 'became-busy']) {
     let guards = 0
     const { calls, updater, controller } = fixture({
-      canInstall: () => { guards++; return mode === 'cancel' || (mode === 'became-busy' && guards === 1) },
+      canInstall: () => {
+        guards++
+        return mode === 'cancel' || (mode === 'became-busy' && guards === 1)
+      },
       dialog: { showMessageBox: async () => ({ response: mode === 'cancel' ? 1 : 0 }) },
     })
     await controller.check()
@@ -122,8 +152,12 @@ test('Mac only opens validated DMG after confirmation and never initializes Wind
   for (const response of [0, 1]) {
     let requests = 0
     const { calls, controller } = fixture({
-      platform: 'darwin', arch: 'arm64',
-      fetchImpl: async () => { requests++; return new Response(JSON.stringify(mac)) },
+      platform: 'darwin',
+      arch: 'arm64',
+      fetchImpl: async () => {
+        requests++
+        return new Response(JSON.stringify(mac))
+      },
       dialog: { showMessageBox: async () => ({ response }) },
     })
     assert.equal(requests, 0)
@@ -140,37 +174,76 @@ test('Mac only opens validated DMG after confirmation and never initializes Wind
 
 test('Mac equal/older versions and unsupported architecture never open a download', async () => {
   for (const version of ['1.6.6', '1.6.5']) {
-    const { calls, controller } = fixture({ platform: 'darwin', arch: 'arm64',
-      fetchImpl: async () => new Response(JSON.stringify({ ...mac, version })) })
+    const { calls, controller } = fixture({
+      platform: 'darwin',
+      arch: 'arm64',
+      fetchImpl: async () => new Response(JSON.stringify({ ...mac, version })),
+    })
     await controller.check()
     assert.equal(calls.urls.length, 0)
     assert.match(calls.dialogs[0].message, /最新/)
   }
   let fetched = false
-  const { controller } = fixture({ platform: 'darwin', arch: 'x64', fetchImpl: () => { fetched = true } })
+  const { controller } = fixture({
+    platform: 'darwin',
+    arch: 'x64',
+    fetchImpl: () => {
+      fetched = true
+    },
+  })
   await controller.check()
   assert.equal(fetched, false)
 })
 
 test('Mac rejects wrong role, prereleases and unsafe files; versions use semantic comparison', () => {
-  for (const change of [{ role: 'teacher' }, { arch: 'x64' }, { version: 'bad' },
-    { version: '2.0.0-beta.1' }, ...['../a.dmg', 'https://evil/a.dmg', 'a\\b.dmg', '%2e%2e.dmg',
-      'a.zip', 'a.dmg?x', 'a\n.dmg'].map((file) => ({ file }))]) {
+  for (const change of [
+    { role: 'teacher' },
+    { arch: 'x64' },
+    { version: 'bad' },
+    { version: '2.0.0-beta.1' },
+    ...[
+      '../a.dmg',
+      'https://evil/a.dmg',
+      'a\\b.dmg',
+      '%2e%2e.dmg',
+      'a.zip',
+      'a.dmg?x',
+      'a\n.dmg',
+    ].map((file) => ({ file })),
+  ]) {
     assert.throws(() => validateMacManifest({ ...mac, ...change }, directory, '1.6.6'))
   }
-  assert.equal(validateMacManifest({ ...mac, version: '1.10.0' }, directory, '1.9.0').available, true)
+  assert.equal(
+    validateMacManifest({ ...mac, version: '1.10.0' }, directory, '1.9.0').available,
+    true,
+  )
 })
 
 test('real HTTP manifest request rejects redirects, malformed and oversized content', async (t) => {
   let mode = 'ok'
   const server = http.createServer((_req, res) => {
-    if (mode === 'redirect') { res.writeHead(302, { Location: '/another' }); return res.end() }
-    if (mode === '404') { res.writeHead(404); return res.end() }
-    res.end(mode === 'ok' ? JSON.stringify(mac) : mode === 'large' ? ' '.repeat(70000) : '<html>bad</html>')
+    if (mode === 'redirect') {
+      res.writeHead(302, { Location: '/another' })
+      return res.end()
+    }
+    if (mode === '404') {
+      res.writeHead(404)
+      return res.end()
+    }
+    res.end(
+      mode === 'ok'
+        ? JSON.stringify(mac)
+        : mode === 'large'
+          ? ' '.repeat(70000)
+          : '<html>bad</html>',
+    )
   })
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
-  t.after(() => { server.closeAllConnections(); server.close() })
+  t.after(() => {
+    server.closeAllConnections()
+    server.close()
+  })
   const root = `http://127.0.0.1:${server.address().port}/update/student/mac-arm64/`
   assert.equal((await fetchMacManifest(root, '1.6.6')).available, true)
   for (mode of ['redirect', '404', 'large', 'malformed']) {

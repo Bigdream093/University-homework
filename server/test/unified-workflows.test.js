@@ -6,6 +6,10 @@ import path from 'node:path'
 import request from 'supertest'
 import bcrypt from 'bcryptjs'
 import ExcelJS from 'exceljs'
+import {
+  serializeRequiredQuestions,
+  serializeRequiredAnswers,
+} from '@university-homework/domain/requiredAnswers'
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mohen-unified-'))
 process.env.NODE_ENV = 'test'
 process.env.TZ = 'UTC'
@@ -44,9 +48,120 @@ async function call(name, method, url, body, status = 200) {
   assert.equal(r.status, status, method + ' ' + url + ': ' + r.text)
   return r.body
 }
+async function submissionRows(name, assignmentId) {
+  const response = await call(name, 'get', `/assignments/${assignmentId}/submissions`)
+  assert.ok(Array.isArray(response.rows), 'submission list returns paginated rows')
+  return response.rows
+}
+function submissionItem(apiBase) {
+  const kind = apiBase.startsWith('/group-submissions/') ? 'group' : 'individual'
+  return { id: Number(apiBase.split('/').at(-1)), kind }
+}
+async function submissionAction(name, action, assignmentId, apiBase, body, status = 200) {
+  return call(
+    name,
+    'post',
+    `/assignments/${assignmentId}/batch-${action}`,
+    {
+      ...body,
+      items: [submissionItem(apiBase)],
+    },
+    status,
+  )
+}
 const { resolveUploadPath } = await import('../src/utils/uploadPath.js')
 const diskPath = (key) => resolveUploadPath(key)
 let sequence = 0
+
+test('多道必答题目逐题校验，保存规范快照，修改发布后的规范不要求已有提交重交', async () => {
+  const { c } = await fixture()
+  const prompts = [
+    { id: 'time', title: '总用时？', guidance: '请按小时填写。' },
+    { id: 'method', title: '用了什么方法？', guidance: '列出步骤。' },
+  ]
+  const required = serializeRequiredQuestions(prompts)
+  const a = await assignment(c, { required_answer: required })
+  const missing = serializeRequiredAnswers(required, { time: '2小时' })
+  await call(
+    'alice',
+    'post',
+    '/assignments/' + a.id + '/submit',
+    { content: missing, answer_question: required, base_version: 0 },
+    400,
+  )
+  await call(
+    'alice',
+    'post',
+    '/upload-sessions',
+    {
+      kind: 'submission',
+      assignment_id: a.id,
+      base_version: 0,
+      metadata: { content: missing, answer_question: required },
+      files: [],
+    },
+    400,
+  )
+  await call(
+    'alice',
+    'post',
+    '/assignments/' + a.id + '/submit',
+    {
+      content: '任意非空文字不能绕过逐题校验',
+      answer_question: required,
+      base_version: 0,
+    },
+    400,
+  )
+  const content = serializeRequiredAnswers(required, {
+    time: '2小时',
+    method: '先分析，再绘图。',
+  })
+  const first = await call(
+    'alice',
+    'post',
+    '/assignments/' + a.id + '/submit',
+    { content, answer_question: required, base_version: 0 },
+    201,
+  )
+  const downloaded = await request(app)
+    .get('/api' + first.api_base + '/file')
+    .set('Authorization', 'Bearer ' + (await login('teacher')))
+  assert.equal(downloaded.status, 200, downloaded.text)
+  assert.match(downloaded.text, /请按小时填写。/)
+  assert.match(downloaded.text, /先分析，再绘图。/)
+  assert.doesNotMatch(downloaded.text, /required-answers|"version"/)
+  await submissionAction('teacher', 'grade', a.id, first.api_base, {
+    score: 90,
+    comment: '完成',
+  })
+  const updatedRequired = serializeRequiredQuestions(
+    prompts.map((prompt) => ({
+      ...prompt,
+      guidance: prompt.guidance + '更新后的说明。',
+    })),
+  )
+  await call('teacher', 'put', '/assignments/' + a.id, {
+    required_answer: updatedRequired,
+  })
+  const saved = await call('alice', 'get', '/assignments/' + a.id + '/my-submission')
+  assert.equal(saved.status, 'graded')
+  assert.equal(db.prepare('SELECT score FROM submissions WHERE id=?').get(first.id).score, 90)
+  assert.equal(saved.submit_count, 1)
+  const history = await call('alice', 'get', first.api_base + '/history')
+  assert.equal(history[0].answer_question, required)
+  assert.equal(history[0].content, content)
+  const receipts = await call('alice', 'get', first.api_base + '/receipts')
+  assert.equal(receipts[0].snapshot.answer_question, required)
+  await call(
+    'alice',
+    'post',
+    '/assignments/' + a.id + '/submit',
+    { content, answer_question: required, base_version: 1 },
+    409,
+  )
+})
+
 async function fixture() {
   const c = await call('teacher', 'post', '/courses', { name: '统一测试' + ++sequence }, 201)
   for (const n of ['alice', 'bob', 'cara'])
@@ -97,7 +212,9 @@ async function groupFixture() {
       201,
     )
   const a = await assignment(f.c, { work_mode: 'group', status: 'draft' })
-  await call('teacher', 'post', '/assignments/' + a.id + '/groups/snapshot', { group_ids: [g.id] })
+  await call('teacher', 'post', '/assignments/' + a.id + '/groups/snapshot', {
+    group_ids: [g.id],
+  })
   await call('teacher', 'post', '/assignments/' + a.id + '/publish')
   return { ...f, g, a }
 }
@@ -161,7 +278,9 @@ test('F02/F04 notice detail, versioned reads, irreversible publication and withd
   await call('alice', 'post', '/notices/' + n.id + '/read', { revision: 1 })
   await call('alice', 'post', '/notices/' + n.id + '/read', { revision: 1 })
   assert.equal((await call('teacher', 'get', '/notices/' + n.id + '/readers')).length, 1)
-  const changed = await call('teacher', 'put', '/notices/' + n.id, { content: '新版内容' })
+  const changed = await call('teacher', 'put', '/notices/' + n.id, {
+    content: '新版内容',
+  })
   assert.equal(changed.content_revision, 2)
   assert.equal(
     (await call('alice', 'get', '/my/courses')).find((x) => x.id === c.id).unread_notice_count,
@@ -178,7 +297,9 @@ test('F02/F04 notice detail, versioned reads, irreversible publication and withd
     400,
   )
   await call('teacher', 'delete', '/notices/' + n.id, undefined, 400)
-  await call('teacher', 'post', '/notices/' + n.id + '/withdraw', { reason: '误发私人说明' })
+  await call('teacher', 'post', '/notices/' + n.id + '/withdraw', {
+    reason: '误发私人说明',
+  })
   const tombstone = await call('alice', 'get', '/notices/' + n.id)
   assert.equal(tombstone.content, undefined)
   assert.equal(tombstone.withdrawn_reason, undefined)
@@ -199,7 +320,12 @@ test('F08 scheduling catchup is bounded, idempotent and preserves intended time 
     'teacher',
     'post',
     '/courses/' + c.id + '/notices',
-    { title: '预约', content: '正文', status: 'scheduled', scheduled_at: '2099-01-01 00:00:00' },
+    {
+      title: '预约',
+      content: '正文',
+      status: 'scheduled',
+      scheduled_at: '2099-01-01 00:00:00',
+    },
     201,
   )
   await call('alice', 'get', '/notices/' + n.id, undefined, 404)
@@ -207,7 +333,9 @@ test('F08 scheduling catchup is bounded, idempotent and preserves intended time 
   db.prepare('UPDATE notices SET scheduled_at=? WHERE id=?').run(scheduled, n.id)
   assert.equal(publishDueNotices(), 1)
   assert.equal(publishDueNotices(), 0)
-  const changed = await call('teacher', 'put', '/notices/' + n.id, { content: '修订' })
+  const changed = await call('teacher', 'put', '/notices/' + n.id, {
+    content: '修订',
+  })
   assert.equal(changed.scheduled_at, scheduled)
   const before = changed.published_at
   publishDueNotices()
@@ -258,7 +386,9 @@ test('F09 private original/replies and student identity never leak; teacher cont
     ),
   )
   await call('alice', 'put', '/questions/' + q.id, { title: '改写', content: '改写' }, 409)
-  await call('teacher', 'put', '/questions/' + q.id + '/manage', { status: 'resolved' })
+  await call('teacher', 'put', '/questions/' + q.id + '/manage', {
+    status: 'resolved',
+  })
   await call(
     'teacher',
     'post',
@@ -348,7 +478,7 @@ test('F06/F07/F10 retry keeps grade/count/receipt, actual bytes fingerprint, ext
   assert.equal(first.status, 201, first.text)
   assert.equal(first.body.is_late, 1)
   assert.equal(first.body.file_url, undefined)
-  await call('teacher', 'post', first.body.api_base + '/grade', {
+  await submissionAction('teacher', 'grade', a.id, first.body.api_base, {
     score: 90,
     comment: '教师私密评语',
   })
@@ -380,6 +510,16 @@ test('F06/F07/F10 retry keeps grade/count/receipt, actual bytes fingerprint, ext
     approved_deadline: '2099-01-01 00:00:00',
   })
   await call('alice', 'post', '/extensions/' + e.id + '/withdraw', {}, 409)
+  await call('teacher', 'post', `/assignments/${a.id}/batch-return`, {
+    returned_reason: '请按延期后的截止时间修改后重交',
+    items: [
+      {
+        ...submissionItem(first.body.api_base),
+        expected_status: 'graded',
+        expected_submit_count: 1,
+      },
+    ],
+  })
   const second = await submit('alice', a, 'receipt-second-key', '第二次答案', 1)
   assert.equal(second.status, 201, second.text)
   assert.equal(second.body.is_late, 0)
@@ -411,6 +551,41 @@ test('F06/F07/F10 retry keeps grade/count/receipt, actual bytes fingerprint, ext
   ])
     await call('alice', 'get', url, undefined, 403)
   await call('teacher', 'get', first.body.api_base + '/receipts', undefined, 404)
+})
+test('late filter combines with grading status instead of replacing it', async () => {
+  const { c } = await fixture(),
+    a = await assignment(c, { deadline: '2020-01-01 00:00:00' }),
+    submitted = await submit('alice', a, 'late-filter-key')
+  assert.equal(submitted.status, 201, submitted.text)
+  assert.equal(submitted.body.is_late, 1)
+
+  const pending = await call(
+    'teacher',
+    'get',
+    `/assignments/${a.id}/submissions?status=submitted&late=1`,
+  )
+  assert.equal(pending.total, 1)
+  assert.equal(pending.rows[0].status, 'submitted')
+  assert.equal(pending.counts.late, 1)
+
+  await submissionAction('teacher', 'grade', a.id, submitted.body.api_base, {
+    score: 88,
+  })
+  const graded = await call(
+    'teacher',
+    'get',
+    `/assignments/${a.id}/submissions?status=graded&late=1`,
+  )
+  assert.equal(graded.total, 1)
+  assert.equal(graded.rows[0].status, 'graded')
+  assert.equal(graded.rows[0].is_late, 1)
+
+  const noLongerPending = await call(
+    'teacher',
+    'get',
+    `/assignments/${a.id}/submissions?status=submitted&late=1`,
+  )
+  assert.equal(noLongerPending.total, 0)
 })
 test('F10 concurrent same key saves once; changed file bytes conflict and no failed-upload residue', async () => {
   const { c } = await fixture(),
@@ -468,7 +643,11 @@ test('F13 assignment extension whitelist: strict input rules, per-assignment rej
     'teacher',
     'post',
     '/courses/' + c.id + '/assignments',
-    { title: '超长后缀', type: 'document', allowed_extensions: 'abcdefghijklmnop' },
+    {
+      title: '超长后缀',
+      type: 'document',
+      allowed_extensions: 'abcdefghijklmnop',
+    },
     400,
   )
   // 在线作答作业带后缀字段：忽略并存储为不限制
@@ -656,11 +835,22 @@ test('F14 preview images: required, magic-byte validated, counted, replaced on o
     .set('Authorization', 'Bearer ' + (await login('alice')))
   assert.equal(original.status, 200)
   // 图片票据仍绑定签发用户；账号停用后不能继续匿名读取。
-  const ticket = await call('alice', 'post', '/previews/view-ticket', { ids: [previews[0].id] })
+  const ticketResponse = await request(app)
+    .post('/api/previews/view-ticket')
+    .set('Authorization', 'Bearer ' + (await login('alice')))
+    .send({ ids: [previews[0].id, 999999999] })
+  assert.equal(ticketResponse.status, 200, ticketResponse.text)
+  assert.match(ticketResponse.headers['server-timing'], /preview_access;dur=/)
+  assert.match(ticketResponse.headers['server-timing'], /preview_tickets;dur=/)
+  const ticket = ticketResponse.body
+  assert.equal(ticket.tickets[999999999], undefined)
   const urls = ticket.tickets[previews[0].id]
   const ticketThumb = await request(app).get(urls.thumbnail)
   const ticketOriginal = await request(app).get(urls.file)
   assert.equal(ticketThumb.status, 200)
+  assert.equal(ticketThumb.headers['x-preview-variant'], 'thumbnail')
+  assert.match(ticketThumb.headers['server-timing'], /preview_access;dur=/)
+  assert.match(ticketThumb.headers['server-timing'], /preview_thumbnail;dur=/)
   assert.equal(ticketThumb.headers['content-type'], thumb.headers['content-type'])
   assert.deepEqual(ticketThumb.body, thumb.body)
   assert.equal(ticketOriginal.status, 200)
@@ -684,11 +874,18 @@ test('F14 preview images: required, magic-byte validated, counted, replaced on o
       const ticketFallback = await request(app).get(urls.thumbnail)
       for (const response of [directFallback, ticketFallback]) {
         assert.equal(response.status, 200)
-        assert.match(response.headers['content-type'], /^image\/png/)
+        assert.match(response.headers['content-type'], /^image\/jpeg/)
         assert.equal(response.headers['content-disposition'], undefined)
         assert.equal(response.headers['x-content-type-options'], 'nosniff')
-        assert.deepEqual(response.body, original.body)
+        assert.equal(response.headers['x-preview-variant'], 'thumbnail')
+        assert.deepEqual(response.body.subarray(0, 3), Buffer.from([255, 216, 255]))
       }
+      assert.deepEqual(directFallback.body, ticketFallback.body)
+      const generated = db
+        .prepare('SELECT thumbnail_url FROM submission_preview_images WHERE id=?')
+        .get(previews[0].id).thumbnail_url
+      assert.ok(generated && generated !== thumbnail)
+      assert.ok(fs.existsSync(diskPath(generated)))
     }
     db.prepare('UPDATE submission_preview_images SET thumbnail_url=?,file_url=? WHERE id=?').run(
       storedPreview.thumbnail_url,
@@ -710,6 +907,14 @@ test('F14 preview images: required, magic-byte validated, counted, replaced on o
   db.prepare("UPDATE users SET status='active' WHERE username='alice'").run()
   await call('bob', 'get', '/submission-previews/' + previews[0].id + '/file', undefined, 403)
   await call('alice', 'get', '/submission-previews/99999/file', undefined, 404)
+  const aliceId = db.prepare("SELECT id FROM users WHERE username='alice'").get().id
+  await call('teacher', 'post', '/students/' + aliceId + '/reset-password')
+  assert.equal((await request(app).get(urls.file)).status, 401)
+  delete tokens.alice
+  const freshTicket = await call('alice', 'post', '/previews/view-ticket', {
+    ids: [previews[0].id],
+  })
+  assert.equal((await request(app).get(freshTicket.tickets[previews[0].id].file)).status, 200)
   // 回执快照包含图片清单
   const receipt = await call('alice', 'get', ok.body.api_base + '/receipts')
   assert.equal(receipt[0].snapshot.preview_count, 2)
@@ -738,31 +943,43 @@ test('F14 preview images: required, magic-byte validated, counted, replaced on o
     require_preview_image: false,
     preview_max_count: 1,
   })
-  assert.equal(
-    (await call('teacher', 'get', '/assignments/' + doc.id + '/submissions'))[0].preview_count,
-    1,
-  )
+  assert.equal((await submissionRows('teacher', doc.id))[0].preview_count, 1)
   await call('teacher', 'put', '/assignments/' + doc.id, {
     require_preview_image: true,
     preview_max_count: 3,
   })
   // 未要求预览的老作业默认为 0，正常编辑
-  await call('teacher', 'put', '/assignments/' + plain.id, { title: '改名不报错' })
+  await call('teacher', 'put', '/assignments/' + plain.id, {
+    title: '改名不报错',
+  })
 })
-test('F15 returned submissions may resubmit once; download-completed counts once', async () => {
+test('退回只解锁一次更正提交，更正次数与自行重交额度分开', async () => {
   const { c } = await fixture(),
     a = await assignment(c, { allow_resubmit_count: 0 })
   const first = await submit('alice', a, 'return-first')
   assert.equal(first.status, 201, first.text)
-  await call('teacher', 'post', first.body.api_base + '/return', {
+  assert.equal(first.body.submit_count, 1)
+  assert.equal(first.body.resubmit_count, 0)
+  const voluntary = await submit('alice', a, 'return-voluntary', '答案', 1)
+  assert.equal(voluntary.status, 400, voluntary.text)
+  await submissionAction('teacher', 'return', a.id, first.body.api_base, {
     returned_reason: '请修改后重新提交',
   })
   const second = await submit('alice', a, 'return-second', '答案', 1)
   assert.equal(second.status, 201, second.text)
   assert.equal(second.body.status, 'submitted')
+  assert.equal(second.body.submit_count, 2)
+  assert.equal(second.body.resubmit_count, 0)
   const third = await submit('alice', a, 'return-third', '答案', 2)
   assert.equal(third.status, 400, third.text)
-  assert.match(third.text, /已达到允许提交次数/)
+  assert.match(third.text, /允许自行重交次数/)
+  await submissionAction('teacher', 'return', a.id, second.body.api_base, {
+    returned_reason: '仍需补充，请再次修改',
+  })
+  const correctedAgain = await submit('alice', a, 'return-third-after-new-return', '再次修改', 2)
+  assert.equal(correctedAgain.status, 201, correctedAgain.text)
+  assert.equal(correctedAgain.body.submit_count, 3)
+  assert.equal(correctedAgain.body.resubmit_count, 0)
   // 断点下载完成登记：同一编号只计一次
   const materialCreate = await request(app)
     .post('/api/courses/' + c.id + '/materials')
@@ -791,22 +1008,66 @@ test('F15 returned submissions may resubmit once; download-completed counts once
   assert.equal(list[0].download_count, 1)
 })
 
+test('已评分提交锁定学生自行修改，教师退回后更正不占自行重交额度', async () => {
+  const { c } = await fixture(),
+    a = await assignment(c, { allow_resubmit_count: 1 })
+  const first = await submit('alice', a, 'graded-lock-first')
+  assert.equal(first.status, 201, first.text)
+  const second = await submit('alice', a, 'graded-lock-second', '主动重交', 1)
+  assert.equal(second.status, 201, second.text)
+  assert.equal(second.body.submit_count, 2)
+  assert.equal(second.body.resubmit_count, 1)
+  await submissionAction('teacher', 'grade', a.id, second.body.api_base, {
+    score: 88,
+    comment: '已批改',
+  })
+  const blocked = await submit('alice', a, 'graded-lock-blocked', '擅自修改', 2)
+  assert.equal(blocked.status, 400, blocked.text)
+  assert.match(blocked.text, /已经评分/)
+  const locked = db
+    .prepare('SELECT score,status,submit_count,resubmit_count FROM submissions WHERE id=?')
+    .get(second.body.id)
+  assert.equal(locked.score, 88)
+  assert.equal(locked.status, 'graded')
+  assert.equal(locked.submit_count, 2)
+  assert.equal(locked.resubmit_count, 1)
+  const returned = await call('teacher', 'post', `/assignments/${a.id}/batch-return`, {
+    returned_reason: '请按意见修改',
+    items: [
+      {
+        ...submissionItem(second.body.api_base),
+        expected_status: 'graded',
+        expected_submit_count: 2,
+      },
+    ],
+  })
+  assert.equal(returned.success_count, 1)
+  const corrected = await submit('alice', a, 'graded-lock-corrected', '按意见修改', 2)
+  assert.equal(corrected.status, 201, corrected.text)
+  assert.equal(corrected.body.status, 'submitted')
+  assert.equal(corrected.body.submit_count, 3)
+  assert.equal(corrected.body.resubmit_count, 1)
+  assert.equal(
+    db.prepare('SELECT score,status FROM submissions WHERE id=?').get(second.body.id).score,
+    null,
+  )
+})
+
 test('release guards cover assignment edits, deadline clearing, statistics, duplicate history id and quarantine expiry', async () => {
   const { c, alice } = await fixture(),
     a = await assignment(c),
     submitted = await submit('alice', a, 'release-guard-submit', '初稿')
   assert.equal(submitted.status, 201, submitted.text)
-  await call('teacher', 'post', submitted.body.api_base + '/grade', { score: 90 })
+  await submissionAction('teacher', 'grade', a.id, submitted.body.api_base, {
+    score: 90,
+  })
   await call('teacher', 'put', '/assignments/' + a.id, { total_score: 89 })
   assert.equal(
     db.prepare('SELECT score FROM submissions WHERE assignment_id=?').get(a.id).score,
     90,
   )
   await call('teacher', 'put', '/assignments/' + a.id, { type: 'document' })
-  assert.equal(
-    (await call('teacher', 'get', '/assignments/' + a.id + '/submissions'))[0].files.length,
-    1,
-  )
+  assert.equal((await submissionRows('teacher', a.id))[0].files.length, 1)
   const extension = await call(
     'alice',
     'post',
@@ -814,7 +1075,9 @@ test('release guards cover assignment edits, deadline clearing, statistics, dupl
     { reason: '需要更多时间', requested_deadline: '2099-01-02 00:00:00' },
     201,
   )
-  const cleared = await call('teacher', 'put', '/assignments/' + a.id, { deadline: null })
+  const cleared = await call('teacher', 'put', '/assignments/' + a.id, {
+    deadline: null,
+  })
   assert.equal(cleared.cancelled_extension_count, 1)
   assert.equal(
     db.prepare('SELECT status FROM extension_requests WHERE id=?').get(extension.id).status,
@@ -838,7 +1101,9 @@ test('release guards cover assignment edits, deadline clearing, statistics, dupl
     { title: '统计通知', content: '正文', status: 'published' },
     201,
   )
-  await call('alice', 'post', '/notices/' + notice.id + '/read', { revision: 1 })
+  await call('alice', 'post', '/notices/' + notice.id + '/read', {
+    revision: 1,
+  })
   assert.equal(
     (await call('teacher', 'get', '/courses/' + c.id + '/notices')).find(
       (row) => row.id === notice.id,
@@ -898,7 +1163,9 @@ test('F11 snapshot required, group permission, member reads, version conflict, p
   assert.equal(member.can_submit, false)
   assert.equal((await call('bob', 'get', member.api_base + '/receipts')).length, 1)
   await call('cara', 'get', member.api_base + '/file', undefined, 403)
-  await call('teacher', 'put', '/assignments/' + a.id, { group_submit_policy: 'any' })
+  await call('teacher', 'put', '/assignments/' + a.id, {
+    group_submit_policy: 'any',
+  })
   const responses = await Promise.all([
     submit('alice', a, 'group-race-alice', '甲', 1),
     submit('bob', a, 'group-race-bob', '乙', 1),
@@ -913,7 +1180,9 @@ test('F11 snapshot required, group permission, member reads, version conflict, p
   )
   const other = await call('bob', 'get', '/assignments/' + a.id + '/extensions')
   assert.equal(other[0].reason, undefined)
-  await call('teacher', 'post', '/extensions/' + e.id + '/decision', { status: 'approved' })
+  await call('teacher', 'post', '/extensions/' + e.id + '/decision', {
+    status: 'approved',
+  })
   assert.equal(
     (await call('bob', 'get', '/assignments/' + a.id + '/submission-context')).effective_deadline,
     '2099-02-01 00:00:00',
@@ -929,7 +1198,10 @@ test('F11 snapshot required, group permission, member reads, version conflict, p
     ),
     true,
   )
-  await call('teacher', 'post', member.api_base + '/grade', { score: 88, comment: '共享教师评语' })
+  await submissionAction('teacher', 'grade', a.id, member.api_base, {
+    score: 88,
+    comment: '共享教师评语',
+  })
   await call('teacher', 'delete', '/courses/' + c.id + '/students/' + bob)
   await call('bob', 'get', member.api_base + '/receipts', undefined, 403)
   const excel = await request(app)
@@ -947,7 +1219,7 @@ test('F11 snapshot required, group permission, member reads, version conflict, p
   const json = JSON.stringify(book.worksheets[0].getSheetValues())
   assert.ok(!json.includes('bob'))
   assert.ok(json.includes('88'))
-  const rows = await call('teacher', 'get', '/assignments/' + a.id + '/submissions')
+  const rows = await submissionRows('teacher', a.id)
   assert.equal(rows.length, 1)
   assert.equal(rows[0].members.length, 1)
   assert.equal(rows[0].submit_count, 2)
@@ -1006,23 +1278,52 @@ test('F05 archive blocks mutations and invites, cancels pending work, reads rema
   assert.equal(as[0].deadline, null)
   assert.equal((await call('teacher', 'get', '/courses/' + copy.body.id + '/students')).length, 0)
 })
-test('F12 help role checks apply to search, direct chapters and downloads; public help is minimal', async () => {
+test('F12 login help is role-specific; authenticated student has four workflow chapters', async () => {
   const pub = await request(app).get('/api/help/public')
   assert.equal(pub.status, 200)
-  assert.equal(pub.body.length, 1)
+  assert.deepEqual(
+    pub.body.map((chapter) => chapter.id),
+    ['student-login'],
+  )
+  assert.equal(pub.body[0].body.match(/^\d+\. /gm).length, 4)
+  const teacherLogin = await request(app).get('/api/help/public?role=teacher')
+  assert.deepEqual(
+    teacherLogin.body.map((chapter) => chapter.id),
+    ['teacher-login'],
+  )
+  assert.equal(teacherLogin.body[0].body.match(/^\d+\. /gm).length, 4)
+  assert.ok(!teacherLogin.body[0].body.includes('学号和密码登录'))
   const student = await call('alice', 'get', '/help')
-  assert.ok(student.some((x) => x.body.includes('回执')))
-  assert.ok(!JSON.stringify(student).includes('docker compose'))
+  assert.deepEqual(
+    student.map((chapter) => chapter.id),
+    ['student-submit', 'student-notice', 'student-material', 'student-qa'],
+  )
+  assert.ok(student.every((chapter) => chapter.format === 'student-manual'))
+  assert.ok(student[0].body.includes('不占自行重交额度'))
+  assert.ok(student[1].body.includes('成功打开通知全文'))
+  assert.ok(student[2].body.includes('教师设置的顺序'))
+  assert.ok(student[3].body.includes('匿名公开摘要和答复'))
+  for (const alias of [
+    'login',
+    'student-course',
+    'student-receipt',
+    'student-extension',
+    'student-group',
+    'student-faq',
+  ])
+    assert.equal((await call('alice', 'get', '/help/' + alias)).id, 'student-submit')
+  assert.equal((await call('alice', 'get', '/help/student-notice')).id, 'student-notice')
   await call('alice', 'get', '/help/maintenance', undefined, 404)
   assert.deepEqual(await call('alice', 'get', '/help?q=docker'), [])
-  const teacher = await call('teacher', 'get', '/help/maintenance')
-  assert.ok(teacher.body.includes('docker compose'))
+  const teacher = await call('teacher', 'get', '/help')
+  assert.equal(teacher.length, 8)
+  assert.equal(teacher.at(-1).nav_title, '更新与部署')
+  assert.ok(teacher.at(-1).body.includes('TAR 镜像文件'))
   const dl = await request(app)
     .get('/api/help/download')
     .set('Authorization', 'Bearer ' + (await login('alice')))
   assert.equal(dl.status, 200)
   assert.ok(!dl.text.includes('JWT_SECRET'))
-  assert.ok(dl.text.includes('课程提问'))
 })
 test('time boundaries, interrupted requests recover and unknown files quarantine without deleting referenced files', async () => {
   const { c } = await fixture()
@@ -1030,7 +1331,9 @@ test('time boundaries, interrupted requests recover and unknown files quarantine
   const uploaded = await request(app)
     .post('/api/assignments/' + a.id + '/submit')
     .set('Authorization', 'Bearer ' + (await login('alice')))
-    .attach('file', Buffer.from('referenced fixture'), { filename: 'referenced.txt' })
+    .attach('file', Buffer.from('referenced fixture'), {
+      filename: 'referenced.txt',
+    })
   assert.equal(uploaded.status, 201, uploaded.text)
   assert.equal(isLate('2026-08-31 12:00:00', '2026-08-31 12:00:00'), 0)
   assert.equal(isLate('2026-08-31 12:00:00', '2026-08-31 12:00:01'), 1)
@@ -1062,7 +1365,9 @@ test('time boundaries, interrupted requests recover and unknown files quarantine
   fs.writeFileSync(unknown, 'preserve')
   fs.utimesSync(unknown, new Date('2020-01-01'), new Date('2020-01-01'))
   const refs = db
-    .prepare("SELECT file_url FROM submission_history WHERE submission_id=? AND file_state='available'")
+    .prepare(
+      "SELECT file_url FROM submission_history WHERE submission_id=? AND file_state='available'",
+    )
     .all(uploaded.body.id)
     .map((x) => x.file_url)
     .filter(Boolean)
@@ -1158,7 +1463,7 @@ test('copying uses independent files; copy failure rolls back course and marks o
     fs.copyFileSync = realCopy
   }
 })
-test('failed receipt transaction preserves old file, grade and attempt count; concurrent final attempt admits one', async () => {
+test('failed receipt transaction preserves old file and attempt count; concurrent final attempt admits one', async () => {
   const { c } = await fixture(),
     a = await assignment(c),
     token = await login('alice')
@@ -1171,7 +1476,6 @@ test('failed receipt transaction preserves old file, grade and attempt count; co
       .attach('file', Buffer.from(value), { filename: 'answer.txt' })
   const first = await upload('rollback-original', 'original')
   assert.equal(first.status, 201)
-  await call('teacher', 'post', first.body.api_base + '/grade', { score: 99, comment: '保留' })
   const old = db.prepare('SELECT * FROM submissions WHERE id=?').get(first.body.id)
   db.exec(
     "CREATE TRIGGER reject_receipt BEFORE INSERT ON submission_receipts BEGIN SELECT RAISE(ABORT,'test receipt failure'); END",
@@ -1185,6 +1489,10 @@ test('failed receipt transaction preserves old file, grade and attempt count; co
   } finally {
     db.exec('DROP TRIGGER reject_receipt')
   }
+  await submissionAction('teacher', 'grade', a.id, first.body.api_base, {
+    score: 99,
+    comment: '评分后锁定',
+  })
   const final = await assignment(c, { allow_resubmit_count: 0 })
   const race = await Promise.all([
     submit('alice', final, 'final-attempt-one'),
@@ -1199,13 +1507,23 @@ test('failed receipt transaction preserves old file, grade and attempt count; co
 })
 test('group empty rows retain members; group package includes each available history only once; archive denies grading', async () => {
   const { a, c } = await groupFixture()
-  const before = await call('teacher', 'get', '/assignments/' + a.id + '/submissions')
+  const before = await submissionRows('teacher', a.id)
   assert.equal(before.length, 1)
   assert.equal(before[0].members.length, 2)
   assert.equal(before[0].id, null)
-  await call('teacher', 'put', '/assignments/' + a.id, { submission_mode: 'append' })
+  await call('teacher', 'put', '/assignments/' + a.id, {
+    submission_mode: 'append',
+  })
   const first = await submit('alice', a, 'group-package-one', 'first')
   assert.equal(first.status, 201, first.text)
+  await call('teacher', 'post', first.body.api_base + '/grade', { score: 20 }, 404)
+  await call(
+    'teacher',
+    'post',
+    first.body.api_base + '/return',
+    { returned_reason: '旧路由不再支持' },
+    404,
+  )
   const second = await submit('alice', a, 'group-package-two', 'second', 1)
   assert.equal(second.status, 201, second.text)
   const zip = await request(app)
@@ -1227,12 +1545,19 @@ test('group empty rows retain members; group package includes each available his
   assert.ok(end >= 0)
   assert.equal(zip.body.readUInt16LE(end + 10), 2)
   await call('teacher', 'post', '/courses/' + c.id + '/archive')
-  await call('teacher', 'post', first.body.api_base + '/grade', { score: 20 }, 409)
+  const item = submissionItem(first.body.api_base)
   await call(
     'teacher',
     'post',
-    first.body.api_base + '/return',
-    { returned_reason: '不能退回' },
+    `/assignments/${a.id}/batch-grade`,
+    { score: 20, items: [item] },
+    409,
+  )
+  await call(
+    'teacher',
+    'post',
+    `/assignments/${a.id}/batch-return`,
+    { returned_reason: '不能退回', items: [item] },
     409,
   )
   assert.equal((await call('bob', 'get', first.body.api_base + '/receipts')).length, 2)
@@ -1334,7 +1659,9 @@ test('teacher ordering reaches students and assignment cards expose progress cou
     teacher.slice(0, 2).map((a) => a.id),
     [second.id, first.id],
   )
-  await call('teacher', 'post', '/assignments/' + second.id + '/move', { direction: 'down' })
+  await call('teacher', 'post', '/assignments/' + second.id + '/move', {
+    direction: 'down',
+  })
   teacher = await call('teacher', 'get', '/courses/' + c.id + '/assignments')
   assert.deepEqual(
     teacher.slice(0, 2).map((a) => a.id),
@@ -1365,7 +1692,9 @@ test('teacher ordering reaches students and assignment cards expose progress cou
       { title: '通知二', status: 'published' },
       201,
     )
-  await call('teacher', 'post', '/notices/' + n2.id + '/move', { direction: 'down' })
+  await call('teacher', 'post', '/notices/' + n2.id + '/move', {
+    direction: 'down',
+  })
   assert.deepEqual(
     (await call('alice', 'get', '/courses/' + c.id + '/notices')).slice(0, 2).map((n) => n.id),
     [n1.id, n2.id],
@@ -1411,6 +1740,80 @@ test('teacher ordering reaches students and assignment cards expose progress cou
     ['公开一', '公开二'],
   )
 })
+test('teacher pending-review counts exclude test students and test-only groups', async () => {
+  const { c } = await fixture()
+  await call(
+    'teacher',
+    'post',
+    '/courses/' + c.id + '/students',
+    { username: 'review_tester', name: '测试员账号' },
+    201,
+  )
+  const individual = await assignment(c)
+  await submit('alice', individual, 'review-real-student')
+  await submit('review_tester', individual, 'review-test-student')
+  let progress = (await call('teacher', 'get', '/courses/' + c.id + '/assignments')).find(
+    (row) => row.id === individual.id,
+  )
+  assert.equal(progress.pending_review_count, 1)
+  const nearest = await assignment(c, {
+    title: '最近截止作业',
+    deadline: '2098-01-01 00:00:00',
+  })
+  await submit('alice', nearest, 'review-nearest-real-student')
+  await submit('review_tester', nearest, 'review-nearest-test-student')
+  const courseSummary = (await call('teacher', 'get', '/courses')).find((row) => row.id === c.id)
+  assert.equal(courseSummary.student_count, 3)
+  assert.equal(courseSummary.latest_assignment_id, nearest.id)
+  assert.equal(courseSummary.latest_assignment_title, '最近截止作业')
+  assert.equal(courseSummary.latest_expected_count, 3)
+  assert.equal(courseSummary.latest_unsubmitted_count, 2)
+  assert.equal(courseSummary.pending_review_count, 2)
+  assert.equal((await call('teacher', 'get', '/courses/' + c.id)).student_count, 3)
+
+  const f = await fixture()
+  await call(
+    'teacher',
+    'post',
+    '/courses/' + f.c.id + '/students',
+    { username: 'group_review_tester', name: '测试员账号' },
+    201,
+  )
+  const testerId = db.prepare("SELECT id FROM users WHERE username='group_review_tester'").get().id
+  const realGroup = await call(
+    'teacher',
+    'post',
+    '/courses/' + f.c.id + '/groups',
+    { name: '真实组', member_ids: [f.alice, f.bob], leader_id: f.alice },
+    201,
+  )
+  const testerGroup = await call(
+    'teacher',
+    'post',
+    '/courses/' + f.c.id + '/groups',
+    { name: '测试组', member_ids: [testerId], leader_id: testerId },
+    201,
+  )
+  const groupAssignment = await assignment(f.c, {
+    work_mode: 'group',
+    status: 'draft',
+  })
+  await call('teacher', 'post', '/assignments/' + groupAssignment.id + '/groups/snapshot', {
+    group_ids: [realGroup.id, testerGroup.id],
+  })
+  await call('teacher', 'post', '/assignments/' + groupAssignment.id + '/publish')
+  await submit('alice', groupAssignment, 'review-real-group')
+  await submit('group_review_tester', groupAssignment, 'review-test-group')
+  progress = (await call('teacher', 'get', '/courses/' + f.c.id + '/assignments')).find(
+    (row) => row.id === groupAssignment.id,
+  )
+  assert.equal(progress.pending_review_count, 1)
+  const groupSummary = (await call('teacher', 'get', '/courses')).find((row) => row.id === f.c.id)
+  assert.equal(groupSummary.student_count, 3)
+  assert.equal(groupSummary.latest_expected_count, 1)
+  assert.equal(groupSummary.latest_unsubmitted_count, 0)
+  assert.equal(groupSummary.pending_review_count, 1)
+})
 test('teacher may change submission requirements without hiding earlier work', async () => {
   const { c } = await fixture()
   const assignmentRow = await call(
@@ -1444,7 +1847,7 @@ test('teacher may change submission requirements without hiding earlier work', a
   })
   assert.equal(changed.type, 'online')
   assert.equal(changed.total_score, 60)
-  const rows = await call('teacher', 'get', '/assignments/' + assignmentRow.id + '/submissions'),
+  const rows = await submissionRows('teacher', assignmentRow.id),
     alice = rows.find((row) => row.username === 'alice')
   assert.equal(alice.id, submitted.body.id)
   assert.equal(alice.files.length, 1)
@@ -1567,4 +1970,123 @@ test('group preview history uses the group history id and enforces course member
   const visible = await call('bob', 'get', '/group-submission-history/' + historyId + '/previews')
   assert.equal(visible.length, 1)
   await call('cara', 'get', '/group-submission-history/' + historyId + '/previews', undefined, 403)
+  const image = visible[0]
+  const tickets = await call('bob', 'post', '/previews/view-ticket', { ids: [image.id] })
+  const ticketUrl = tickets.tickets[image.id].file
+  assert.equal((await request(app).get(ticketUrl)).status, 200)
+  await call('cara', 'get', '/group-submission-previews/' + image.id + '/file', undefined, 403)
+  await call('cara', 'post', '/previews/view-ticket', { ids: [image.id] }, 403)
+  db.prepare("UPDATE assignments SET status='draft' WHERE id=?").run(assignmentRow.id)
+  assert.equal((await request(app).get(ticketUrl)).status, 404)
+  db.prepare("UPDATE assignments SET status='published' WHERE id=?").run(assignmentRow.id)
+  db.prepare('DELETE FROM course_students WHERE course_id=? AND student_id=?').run(c.id, bob)
+  assert.equal((await request(app).get(ticketUrl)).status, 403)
+})
+
+test('资料顺序持久保存、学生同步、课程复制保序并限制归档修改', async () => {
+  const { c } = await fixture()
+  const token = await login('teacher')
+  const ids = []
+  for (const title of ['第一份', '第二份', '第三份']) {
+    const response = await request(app)
+      .post(`/api/courses/${c.id}/materials`)
+      .set('Authorization', 'Bearer ' + token)
+      .field('title', title)
+      .attach('file', Buffer.from(title), { filename: 'notes.txt' })
+    assert.equal(response.status, 201, response.text)
+    ids.push(response.body.id)
+  }
+  const list = () => call('teacher', 'get', `/courses/${c.id}/materials`)
+  assert.deepEqual(
+    (await list()).map((row) => row.id),
+    [ids[2], ids[1], ids[0]],
+  )
+  const original = await list()
+  await call('teacher', 'post', `/materials/${ids[0]}/move`, { direction: 'up' })
+  const ordered = await list()
+  assert.deepEqual(
+    ordered.map((row) => row.id),
+    [ids[2], ids[0], ids[1]],
+  )
+  assert.deepEqual(
+    (await call('alice', 'get', `/courses/${c.id}/materials`)).map((row) => row.id),
+    ordered.map((row) => row.id),
+  )
+  for (const row of ordered) {
+    const prior = original.find((item) => item.id === row.id)
+    assert.equal(row.created_at, prior.created_at)
+    assert.equal(row.download_count, prior.download_count)
+  }
+  await call('teacher', 'post', `/materials/${ids[2]}/move`, { direction: 'up' })
+  assert.deepEqual(
+    (await list()).map((row) => row.id),
+    ordered.map((row) => row.id),
+  )
+  await call('alice', 'post', `/materials/${ids[0]}/move`, { direction: 'up' }, 403)
+  const copied = await call('teacher', 'post', `/courses/${c.id}/copy`, { name: '顺序复制' }, 201)
+  assert.deepEqual(
+    (await call('teacher', 'get', `/courses/${copied.id}/materials`)).map((row) => row.title),
+    ordered.map((row) => row.title),
+  )
+  await call('teacher', 'post', `/courses/${c.id}/archive`)
+  await call('teacher', 'post', `/materials/${ids[0]}/move`, { direction: 'down' }, 409)
+})
+
+test('预览原图内嵌响应与明确下载兼容，缩略图存在但原文件缺失时返回可辨认的错误', async () => {
+  const { c } = await fixture()
+  const a = await assignment(c, {
+    type: 'document',
+    require_preview_image: 1,
+    preview_max_count: 2,
+  })
+  const uploaded = await submitWithPreviews('alice', a, 'inline-preview-' + c.id, [PNG_1PX])
+  assert.equal(uploaded.status, 201, uploaded.text)
+  const rows = await submissionRows('teacher', a.id)
+  const preview = rows.find((row) => row.id === uploaded.body.id).previews[0]
+  const token = await login('teacher')
+  const inline = await request(app)
+    .get(preview.preview)
+    .set('Authorization', 'Bearer ' + token)
+  assert.equal(inline.status, 200)
+  assert.match(inline.headers['content-type'], /^image\/png/)
+  assert.equal(inline.headers['content-disposition'], 'inline')
+  assert.deepEqual(inline.body, PNG_1PX)
+  const download = await request(app)
+    .get(preview.preview + '?download=1')
+    .set('Authorization', 'Bearer ' + token)
+  assert.match(download.headers['content-disposition'], /^attachment/)
+  const stored = db.prepare('SELECT * FROM submission_preview_images WHERE id=?').get(preview.id)
+  db.prepare('UPDATE submission_preview_images SET file_url=? WHERE id=?').run(
+    'previews/nonexistent-original.png',
+    preview.id,
+  )
+  try {
+    const { tickets } = await call('teacher', 'post', '/previews/view-ticket', {
+      ids: [preview.id],
+    })
+    assert.ok(tickets[preview.id])
+    const thumbnail = await request(app).get(tickets[preview.id].thumbnail)
+    assert.equal(thumbnail.status, 200)
+    const missing = await request(app).get(tickets[preview.id].file)
+    assert.equal(missing.status, 404)
+    assert.match(missing.body.message, /预览图文件不存在/)
+  } finally {
+    db.prepare('UPDATE submission_preview_images SET file_url=? WHERE id=?').run(
+      stored.file_url,
+      preview.id,
+    )
+  }
+})
+
+test('退回原因显示在本人课程作业卡片，其他学生不能串读', async () => {
+  const { c } = await fixture()
+  const a = await assignment(c)
+  const saved = await call('alice', 'post', `/assignments/${a.id}/submit`, { content: '答案' }, 201)
+  await submissionAction('teacher', 'return', a.id, saved.api_base, {
+    returned_reason: '请补充设计依据',
+  })
+  const own = await call('alice', 'get', `/courses/${c.id}/assignments`)
+  const other = await call('bob', 'get', `/courses/${c.id}/assignments`)
+  assert.equal(own.find((row) => row.id === a.id).returned_reason, '请补充设计依据')
+  assert.ok(!JSON.stringify(other).includes('请补充设计依据'))
 })

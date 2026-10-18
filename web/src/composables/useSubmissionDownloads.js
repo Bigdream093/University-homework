@@ -19,15 +19,6 @@ export function useSubmissionDownloads(route, assignment) {
     })
   }
 
-  async function download(row) {
-    const group = row.api_base.startsWith('/group-submissions/')
-    await downloadTask.start({
-      endpoint: `/api${row.api_base}/package`,
-      ticket: { kind: 'submission-package', id: row.id, group },
-      fileName: `${assignment.value.title}-${row.name}.zip`,
-    })
-  }
-
   async function downloadAll() {
     await downloadTask.start({
       endpoint: `/api/assignments/${route.params.id}/package`,
@@ -48,5 +39,5 @@ export function useSubmissionDownloads(route, assignment) {
     }
   }
 
-  return { downloadTask, downloadSingle, download, downloadAll, exportExcel }
+  return { downloadTask, downloadSingle, downloadAll, exportExcel }
 }

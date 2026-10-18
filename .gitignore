@@ -6,8 +6,7 @@ server/uploads/
 *.log
 release/
 .mimosa/
-desktop/build/
-!desktop/build/
+desktop/build/*
 !desktop/build/*.png
 desktop/build-mac-staging/
 desktop/release-final/
@@ -19,3 +18,11 @@ data/
 uploads/
 backups/
 /test-results/
+/server/build-info.json
+/dist/
+/playwright-report/
+.env.*
+!.env.example
+*.bak
+*.orig
+*.rej

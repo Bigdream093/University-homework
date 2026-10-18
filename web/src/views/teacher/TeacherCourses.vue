@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { newRequestId, intentSignature } from '../../composables/useUpload.js'
@@ -10,6 +10,11 @@ const status = ref('active'),
   copyKey = ref(''),
   copySignature = ref(''),
   copyLoading = ref(false)
+function openPendingReviews(courseId) {
+  router.push({ path: '/teacher/reviews', query: courseId ? { course_id: String(courseId) } : {} })
+}
+const isDialogDismissal = (error) =>
+  ['cancel', 'close'].includes(error) || ['cancel', 'close'].includes(error?.message)
 function openCopy(course) {
   copyForm.value = {
     source_id: course.id,
@@ -54,19 +59,31 @@ async function archive(course) {
     await api.post('/courses/' + course.id + (course.status === 'active' ? '/archive' : '/restore'))
     await load()
   } catch (error) {
-    if (error !== 'cancel') ElMessage.error(messageOf(error))
+    if (!isDialogDismissal(error)) ElMessage.error(messageOf(error))
   }
 }
 const courses = ref([]),
   dialog = ref(false),
   loading = ref(false),
+  listLoading = ref(false),
+  loadError = ref(''),
   router = useRouter(),
   form = reactive({ name: '', code: '', description: '' })
+let courseLoadSequence = 0
+const visibleCourses = computed(() =>
+  courses.value.filter((course) => status.value === 'all' || course.status === status.value),
+)
 async function load() {
+  const sequence = ++courseLoadSequence
+  listLoading.value = true
+  loadError.value = ''
   try {
-    courses.value = (await api.get('/courses')).data
+    const { data } = await api.get('/courses')
+    if (sequence === courseLoadSequence) courses.value = data
   } catch (error) {
-    ElMessage.error(messageOf(error))
+    if (sequence === courseLoadSequence) loadError.value = messageOf(error)
+  } finally {
+    if (sequence === courseLoadSequence) listLoading.value = false
   }
 }
 async function create() {
@@ -94,9 +111,9 @@ async function remove(course, event) {
     )
     await api.delete(`/courses/${course.id}`)
     ElMessage.success('已删除')
-    load()
+    await load()
   } catch (error) {
-    if (error !== 'cancel') ElMessage.error(messageOf(error))
+    if (!isDialogDismissal(error)) ElMessage.error(messageOf(error))
   }
 }
 onMounted(load)
@@ -105,9 +122,7 @@ onMounted(load)
   <div>
     <div class="page-head">
       <div>
-        <span class="badge">教师工作台</span>
         <h1>课程管理</h1>
-        <p>集中管理课程、学生名单与作业进度</p>
       </div>
       <el-button type="primary" size="large" color="#15554e" @click="dialog = true"
         >＋ 新建课程</el-button
@@ -118,16 +133,21 @@ onMounted(load)
       ><el-radio-button value="archived">已归档</el-radio-button
       ><el-radio-button value="all">全部</el-radio-button></el-radio-group
     >
-    <div v-if="courses.length" class="course-grid">
+    <div v-if="loadError" class="panel empty">
+      <p>{{ loadError }}</p>
+      <el-button size="small" @click="load">重试</el-button>
+    </div>
+    <div v-if="listLoading && !courses.length" class="panel empty">正在加载课程…</div>
+    <div v-else-if="visibleCourses.length" v-loading="listLoading" class="course-grid">
       <article
-        v-for="course in courses.filter((course) => status === 'all' || course.status === status)"
+        v-for="course in visibleCourses"
         :key="course.id"
-        class="course-card"
+        class="course-card teacher-course-card"
         @click="router.push(`/teacher/courses/${course.id}`)"
       >
-        <div style="display: flex; justify-content: space-between">
+        <div class="course-card-header">
           <span class="badge">{{ course.code || '未设代码' }}</span>
-          <div @click.stop>
+          <div class="course-card-actions" @click.stop>
             <el-button text @click="openCopy(course)">复制</el-button
             ><el-button text @click="archive(course)">{{
               course.status === 'active' ? '归档' : '恢复'
@@ -142,17 +162,37 @@ onMounted(load)
           </div>
         </div>
         <h3>{{ course.name }}</h3>
-        <p>{{ course.description || '尚未填写课程说明' }}</p>
-        <div class="meta-row">
-          <span>{{ course.student_count }} 名学生</span
-          ><span>{{ course.assignment_count }} 项作业</span
-          ><span>
-            {{ course.status === 'archived' ? '已归档' : '邀请码 ' + course.invite_code }}
-          </span>
+        <p>{{ course.description || '点击查看课程作业' }}</p>
+        <div class="course-summary">
+          <div class="course-summary-item">
+            <b>{{ course.student_count }}</b>
+            <span>学生</span>
+          </div>
+          <div
+            class="course-summary-item"
+            :title="course.latest_assignment_title || '暂无待截止作业'"
+          >
+            <b>{{ course.latest_assignment_id ? course.latest_unsubmitted_count : '—' }}</b>
+            <span>未交数</span>
+          </div>
+          <div
+            class="course-summary-item pending-review-link"
+            role="link"
+            tabindex="0"
+            @click.stop="openPendingReviews(course.id)"
+            @keydown.enter.stop="openPendingReviews(course.id)"
+          >
+            <b>{{ course.pending_review_count || 0 }}</b>
+            <span>未批改</span>
+          </div>
         </div>
       </article>
     </div>
-    <div v-else class="panel empty">
+    <div v-else-if="courses.length" class="panel empty">
+      <h3>当前筛选下没有课程</h3>
+      <p>切换到其他课程状态查看。</p>
+    </div>
+    <div v-else-if="!listLoading && !loadError" class="panel empty">
       <h3>还没有课程</h3>
       <p>创建第一门课程，然后导入学生名单。</p>
     </div>

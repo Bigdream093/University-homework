@@ -5,7 +5,7 @@ services:
     container_name: university-homework
     restart: unless-stopped
     ports:
-      - "34567:3000"
+      - '34567:3000'
     volumes:
       - ./data:/app/data
       - ./uploads:/app/uploads

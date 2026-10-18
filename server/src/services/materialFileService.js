@@ -28,7 +28,7 @@ export function serveMaterialFile(id, user, res, req = res.req, next = () => {})
     recordMaterialDownload(material.id, user.id)
   })
 }
-export function recordMaterialDownload(materialId, studentId) {
+function recordMaterialDownload(materialId, studentId) {
   const at = nowText()
   try {
     db.prepare(

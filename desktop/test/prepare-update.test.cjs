@@ -17,7 +17,11 @@ test('release preparation verifies Windows hashes and role; stages DMG JSON inde
   const bytes = Buffer.from('test installer')
   fs.writeFileSync(path.join(source, file), bytes)
   fs.writeFileSync(path.join(source, `${file}.blockmap`), 'test blockmap')
-  const entry = { url: file, size: bytes.length, sha512: crypto.createHash('sha512').update(bytes).digest('base64') }
+  const entry = {
+    url: file,
+    size: bytes.length,
+    sha512: crypto.createHash('sha512').update(bytes).digest('base64'),
+  }
   const manifest = { version: '1.6.6', files: [entry] }
   fs.writeFileSync(path.join(source, 'latest.yml'), YAML.stringify(manifest))
   const output = await prepareUpdate('student', 'win32', root)
